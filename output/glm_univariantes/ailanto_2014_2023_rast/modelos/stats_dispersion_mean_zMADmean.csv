@@ -1,0 +1,3 @@
+"","Estimate","Std. Error","z value","Pr(>|z|)","variable","nagelkerke"
+"(Intercept)",-0.3906960890734,0.26315418882254,-1.48466604625043,0.137632310306813,"dispersion_mean_zMADmean",0.0334575365645482
+"dispersion_mean_zMADmean",0.324742014903141,0.1724014191631,1.88363887304152,0.0596138399324032,"dispersion_mean_zMADmean",0.0334575365645482

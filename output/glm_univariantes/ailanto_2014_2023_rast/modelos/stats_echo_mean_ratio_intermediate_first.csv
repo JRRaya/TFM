@@ -1,0 +1,3 @@
+"","Estimate","Std. Error","z value","Pr(>|z|)","variable","nagelkerke"
+"(Intercept)",0.0164225541257965,0.216134122929211,0.0759831622292021,0.93943249406227,"echo_mean_ratio_intermediate_first",0.000131898641222724
+"echo_mean_ratio_intermediate_first",-0.682390998780818,5.71844538573972,-0.119331558273254,0.905012682238286,"echo_mean_ratio_intermediate_first",0.000131898641222724

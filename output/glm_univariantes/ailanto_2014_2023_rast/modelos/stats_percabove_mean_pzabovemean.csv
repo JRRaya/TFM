@@ -1,0 +1,3 @@
+"","Estimate","Std. Error","z value","Pr(>|z|)","variable","nagelkerke"
+"(Intercept)",-0.0944867031523135,0.791227735072563,-0.11941783504802,0.904944332076667,"percabove_mean_pzabovemean",0.000138194927403893
+"percabove_mean_pzabovemean",0.00208641305048165,0.01707935362368,0.122159953851468,0.902772341056693,"percabove_mean_pzabovemean",0.000138194927403893

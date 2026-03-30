@@ -1,0 +1,408 @@
+---
+title: "Boceto TFM"
+# subtitle: "Entrega de la asignatura 'Sensores: preprocesado, corrección y fusión de imágenes' del máster de Geoforest"
+author: "José Raúl Raya Castillo"
+date: today
+lang: es
+format:
+  html:
+    toc: true
+    toc-location: left
+    number-sections: true
+    embed-resources: true
+    self-contained-math: true
+    code-fold: true
+    toc-title: "índice de contenidos"
+knitr:
+  opts_knit:
+    root.dir: ".."
+bibliography: references.bib
+---
+
+# Introducción
+
+La escala es un factor a tener en cuenta a la hora de dirigir nuestro estudio. Esto se debe, especialmente, a que la biodiversidad es una variable escalodependiente. A grandes escalas (regionales), la relación entre la riqueza especies nativas y la de especies invasoras puede ser positiva, ya que ambas responde de manera similar a las condiciones ambientales [@cheng2024]. Por otro lado, esta relación se puede invertir a pequeña escala, ya que en esta se refleja de manera más marcada como la funcionalidad del ecosistema (es decir, como las especies que comparten un área geográfica concreta son capaces de acoplar el empleo de los recursos para no competir entre ellas) juega un papel crucial en la exclusión de especies exóticas invasoras. Es decir, a escalas más finas se deja apreciar mejor el efecto de la competencia interespecífica en la invasibilidad del ecosistema [@huston1999], mientras que a mayor escala, los estudios tienden a detectar el efecto que tienen variables extrínsecas (bióticas, como la presión de propágulos, o abióticas, como la disponibilidad de recursos) que covarían con la riqueza de especies, de modo que los lugares que tienen condiciones favorables para las especies nativas también las tienen para las invasoras [@levine2000].
+
+Según la *teoría del gradiente de estrés* (*stress-gradient hypothesis*), las interacciones entre las especies puede variar según las condiciones ambientales, pudiendo pasar de una competencia fuerte en "condiciones desfavorables" a una competición moderada o (incluso facilitación) bajo "condiciones favorable" [@steudel2012, @he2013]. Por lo general, cuando las condiciones son adversas, se refuerzan las interacciones positivas entre las especies nativas [@cheng2024]. Esto se debe a que, debido a la coevolución, las especies nativas se han adaptado a ocupar nichos distintos (evitar la compertencia interespecífica), y a ser más competitivas (mayor producción de biomasa) que otras plantas a la hora de ocupar dicho nicho ecológico. Por tanto, el adaptarse muy bien a condiciones generalmente adversas (escasez de recursos, especialmente hídricos, pero también de otros nutrientes), les hace desarrollar evolutivamente ciertas características que las hacen muy competitivas bajo estas circunstancias, pero a costa de dejar de lado otras que son más útiles cuando estas condiciones no son las imperantes.
+
+https://consensus.app/search/native-biodiversity-and-invasiveness/eofWv73uRXaDF3bWllBlmg/?utm_source=share&utm_medium=clipboard
+
+# Setup
+
+```{r}
+#| label: setup
+#| message: false
+#| warning: false
+#| error: false
+#| output: false
+
+# 1. Carga de paquetes y limpieza de entorno
+# 1.1. Limpiamos la RAM
+rm(list = ls(all.names = TRUE))
+pacman::p_unload(pacman::p_loaded(), character.only = TRUE)
+gc(full = TRUE)
+
+# 1.2. Cargamos las librerías a emplear
+pacman::p_load(sf, terra, stringr, dplyr, tidyr, tidyverse, trend, here, ggplot2, ggridges, viridis, patchwork, tidyterra, mapview, stars, whitebox, reticulate, rgbif, vegan, betapart, adespatial, iNEXT, SpadeR, lidR, lidRmetrics, gstat)
+# devtools::install_github("ptompalski/lidRmetrics")
+
+# 1.3. Configuración de `terra`: suprimir las barras de progreso
+options(
+  terra.progress = 0
+)
+
+# 1.4. Configuración de GDAL
+Sys.setenv(GTIFF_SRS_SOURCE = "EPSG")
+options(rgdal_show_exportToProj4_warnings = "none")
+```
+
+# Radiación
+
+```{r}
+#| label: radiacion
+
+# 1. Carga de la capa de radiación
+radiacion <- rast(
+  here("data/radiacion/s00.tif")
+)
+
+# 2. Asignación de CRS en caso de que aun no lo esté
+crs(radiacion) <- "EPSG:25830" # Esto se comprobó empleando QGIS
+```
+
+# Área de Estudio
+
+## Evolución periodo 2008-2023
+
+```{r}
+#| label: time-evolution
+
+# 3. Obtención de la evolución del ailanto (diferencia 2023 - 2008)
+# 3.1. Carga de la capa de todos los polígonos
+ailanto <- st_read(
+  here("data/ailanto/ailanthus_all.shp")
+)
+
+# 3.2. Obtención de los polígonos correspondientes al año 2008 y 2023
+# 3.2.1. '2008'
+# 3.2.1.1. Selección y filtrado
+presencias_2008 <- ailanto %>% 
+  filter(Year == 2008) %>% 
+  select(geometry, ID, Road_side, Altitude_m) %>% 
+  select(
+    geometry, 
+    ID, 
+    arcen = Road_side,    
+    altitud = Altitude_m  
+  )
+
+# 3.2.1.2. Comprobación visual
+mapview(presencias_2008)
+
+# 3.2.1.3. Guardado
+st_write(
+  presencias_2008,
+  here("data/ailanto/presnecias_2008.gpkg"),
+  quiet = TRUE,
+  delete_dsn = TRUE
+)
+
+# 3.2.2. '2023'
+# 3.2.2.1. Selección y filtrado
+presencias_2023 <- ailanto %>% 
+  filter(Year == 2023) %>% 
+  select(geometry, ID, Road_side, Altitude_m) %>% 
+  select(
+    geometry, 
+    ID, 
+    arcen = Road_side,    
+    altitud = Altitude_m  
+  )
+
+# 3.2.2.2. Comprobación visual
+mapview(presencias_2023) +
+  mapview(presencias_2008)
+
+# 3.2.2.3. Guardado
+st_write(
+  presencias_2023,
+  here("data/ailanto/presnecias_2023.gpkg"),
+  quiet = TRUE,
+  delete_dsn = TRUE
+)
+j
+# 3.3. Obtención de la invasión en el periodo de tiempo 2008-2023
+# 3.3.1. Aplicar diferencia
+presencias_2008_2023 <- st_difference(presencias_2023, presencias_2008)
+
+# 3.3.1. Comprobación visual
+mapview(presencias_2023) +
+  mapview(presencias_2008) +
+  mapview(presencias_2008_2023)
+
+# 3.3.3. Guardado
+st_write(
+  presencias_2008_2023,
+  here("data/ailanto/presnecias_2008_2023.gpkg"),
+  quiet = TRUE,
+  delete_dsn = TRUE
+)
+
+# 3.4. Limpieza de memoria
+rm(presencias_2008, presencias_2023)
+gc(full = TRUE)
+```
+
+## Buffer de la carretera (ROI)
+
+```{r}
+#| label: roi
+
+# 2. Obtención de la capa vetorial de nuestra región de interés (ROI)
+# 2.1. Buffer de 10 metros de la capa de ailanto
+# 2.1.1. Practicamos el 'buffer'
+ailanto_buffer <- ailanto %>% 
+  st_buffer(dist = 10)
+
+# 2.1.2. Guardamos para comprobación posterior en QGIS
+st_write(
+  ailanto_buffer,
+  here("data/ailanto/ailanto_buffer.gpkg"),
+  quiet = TRUE,
+  delete_dsn = TRUE
+)
+
+# 2.2. Carga de la capa de la "red de carreteras de Andalucía"
+# 2.2.1. Carga y recorte al 'bounding box' de la capa de presencias
+carreteras <- st_read(
+  here("data/infraestructura/infraestructura.gpkg"),
+  layer = "T09_14_RedCarreteras" # Comprobar en QGIS
+) %>% 
+  st_filter(ailanto_buffer, .predicate = st_intersects)
+
+# 2.2.2. Comprobación visual
+plot(carreteras$Shape)
+
+# 2.3. Guardado en disco
+st_write(
+  carreteras,
+  here("data/infraestructura/carreteras.gpkg"),
+  quiet = TRUE,
+  delete_dsn = TRUE
+)
+
+# 2.4. 'Buffer' de las carreteras (nuestro ROI)
+# 2.4.1. Calculamos el buffer de 20 metros
+carreteras_buffer <- carreteras$Shape %>% 
+  st_buffer(dist = 20) %>% # Aplicamos buffer de 20 metros
+  st_union() # Fusión de todos los polígonos (multipolígono)
+
+# 2.4.2. Comprobación visual
+plot(carreteras_buffer)
+mapview(carreteras_buffer)
+
+# 2.4.3. Guardamos el resultado
+st_write(
+  carreteras_buffer,
+  here("data/infraestructura/carreteras_buffer.gpkg"),
+  quiet = TRUE,
+  delete_dsn = TRUE
+)
+
+# 2.5. Creación del ROI
+# 2.5.1. Unión de ambos 'buffers'
+roi <- ailanto_buffer %>% 
+  st_union(carreteras_buffer)
+
+# 2.5.2. Disolución espacial
+roi <- roi %>% 
+  group_by() %>% 
+  summarise()
+
+# 2.5.3. Guardado del ROI
+st_write(
+  roi,
+  here("data/roi/roi.shp"),
+  quiet = TRUE,
+  delete_dsn = TRUE
+)
+
+# 2.6. Rasterización del ROI
+# 2.6.1. Creamos el raster
+roi_rast <- roi %>% 
+  rasterize(radiacion)
+
+# 2.5.2. Guardado del ROI rasterizado
+writeRaster(
+  roi_rast,
+  here("data/rou/roi_rast.tif"),
+  overwrite = TRUE
+)
+```
+
+# LiDAR
+
+## Modelo Digital de Elevaciones
+
+```{r}
+#| label: mde
+
+# 8. Modelo Digital de Elevaciones
+# 8.1. Listamos las teselas
+rutas_teselas <- list.files(
+  path = "data/lidar/lidar3",
+  full.names = TRUE
+)
+
+# 8.2. Leemos los metadatos de las teselas (sin cargarlas en RAM)
+teselas <- readLAScatalog(
+  folder = rutas_teselas, 
+  select = "xyzcrn", 
+  filter = "-drop_z_below 0"
+)
+
+# 8.3. Validamos los datos
+errores <- las_check(teselas, print = TRUE)
+
+# 8.4. Cálculo del MDE
+# 8.4.1. Configuramos la escritura en disco
+opt_output_files(teselas) <- here::here("data/mde_idw")
+opt_select(teselas) <- "xyz"
+
+# 8.4.2. Cálculo del MDE
+lidR::rasterize_terrain(
+  teselas,
+  res = 1,
+  algorithm = knnidw(),
+  overwrite = TRUE
+)
+
+# 8.4.3. Comprobación visual
+mde <- terra::rast("data/mde_idw.tif")
+plot(mde)
+
+# 8.4.4. Recorte a la extensión del aoi
+mde_rec <- mde %>% 
+  terra::crop(roi) %>% 
+  terra::mask(roi)
+
+plot(mde_rec)
+
+# 8.4.5. Guardado del ráster recortado  
+terra::writeRaster(
+  mde_rec,
+  here::here("data/mde/mde_idw_rec.tif"),
+  overwrite = TRUE
+)
+
+# 8.4.6. Liberamos memoria
+rm(mde, mde_rec)
+gc(full = TRUE)
+terra::tmpFiles(remove = TRUE)
+```
+
+## Métricas del dosel
+
+```{r}
+#| label: normalizacion-teselas
+
+# 9. Normalización de las teselas LiDAR
+# 9.1. Normalización de los puntos de las teselas LiDAR
+# 9.1.1. Configurar salida del catálogo
+opt_output_files(teselas) <- {
+  dir.create(here::here("data/lidar/lidar3/norm"), recursive = TRUE, showWarnings = FALSE)
+  file.path(here::here("data/lidar/lidar3/norm"), "{ORIGINALFILENAME}_norm")
+}
+
+# 9.1.2. Configurar formato comprimido de salida
+opt_laz_compression(teselas) <- TRUE
+
+# 9.1.3. Normalización
+teselas_n <- lidR::normalize_height(teselas, tin())
+
+# 9.2. Cálculo del CHM
+# 9.2.1. Cargamos las teselas normalizadas
+# 9.2.1.1. Listamos las teselas normalizadas
+rutas_teselas_n <- list.files(
+  path = "data/lidar/lidar3/norm",
+  pattern = "^tin.*IRC\\.laz$",
+  full.names = TRUE
+)
+
+# 9.2.1.2. Cargamos las teselas como un 'catalogo'
+teselas_n <- readLAScatalog(
+  folder = rutas_teselas_n, 
+  select = "xyzcrn", 
+  filter = "-drop_z_below 0"
+)
+
+# 9.2.1.3. Validación del catálogo
+errores_tin_n <- las_check(teselas_n, print = TRUE)
+```
+
+```{r}
+conjuntos_lidar <- c("lidar1", "lidar2", "lidar3")
+
+for (conjunto in conjuntos_lidar) {
+  
+  # 9.1. Carga de teselas originales
+  if(conjunto == "lidar3") {
+    rutas_teselas <- list.files(
+      path = file.path("data/lidar", conjunto),
+      full.names = TRUE
+    )
+  } else {
+    rutas_teselas <- list.files(
+      path = file.path("data/lidar", conjunto),
+      pattern = "^tin.*IRC\\.laz$",
+      full.names = TRUE
+    )
+  }
+  
+  teselas <- readLAScatalog(
+    folder = rutas_teselas, 
+    select = "xyzcrn", 
+    filter = "-drop_z_below 0"
+  )
+  
+  errores <- las_check(teselas, print = TRUE)
+  
+  # 9.2. Normalización de los puntos de las teselas LiDAR
+  opt_output_files(teselas) <- {
+    dir.create(here::here("data/lidar", conjunto, "norm"), recursive = TRUE, showWarnings = FALSE)
+    file.path(here::here("data/lidar", conjunto, "norm"), "{ORIGINALFILENAME}_norm")
+  }
+  
+  opt_laz_compression(teselas) <- TRUE
+  
+  teselas_n <- lidR::normalize_height(teselas, tin())
+  
+  # 9.3. Cálculo del CHM
+  if(conjunto == "lidar3") {
+    rutas_teselas_n <- list.files(
+      path = file.path("data/lidar", conjunto, "norm")
+      full.names = TRUE
+    )
+  } else {
+    rutas_teselas_n <- list.files(
+      path = file.path("data/lidar", conjunto, "norm"),
+      pattern = "^tin.*IRC\\.laz$",
+      full.names = TRUE
+    )
+  }
+  
+  teselas_n <- readLAScatalog(
+    folder = rutas_teselas_n, 
+    select = "xyzcrn", 
+    filter = "-drop_z_below 0"
+  )
+  
+  errores_tin_n <- las_check(teselas_n, print = TRUE)
+  
+  rm(teselas, teselas_n, rutas_teselas, rutas_teselas_n, errores, errores_tin_n)
+  gc(full = TRUE)
+}
+```
+
+
+

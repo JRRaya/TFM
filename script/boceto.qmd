@@ -1,6 +1,5 @@
 ---
 title: "Boceto TFM"
-# subtitle: "Entrega de la asignatura 'Sensores: preprocesado, corrección y fusión de imágenes' del máster de Geoforest"
 author: "José Raúl Raya Castillo"
 date: today
 lang: es
@@ -51,7 +50,12 @@ options(
   terra.progress = 0
 )
 
-terra::setGDALconfig("GTIFF_SRS_SOURCE", "EPSG")
+# 1.4. Configuración de GDAL
+Sys.setenv(GTIFF_SRS_SOURCE = "EPSG")
+options(rgdal_show_exportToProj4_warnings = "none")
+
+# 1.5. Forzar un solo hilo para evitar colisiones de archivos temporales
+lidR::set_lidr_threads(1)
 ```
 
 # Área de Estudio
@@ -65,10 +69,10 @@ terra::setGDALconfig("GTIFF_SRS_SOURCE", "EPSG")
 # 2.1. Buffer de 10 metros de la capa de ailanto
 # 2.1.1. Practicamos el 'buffer'
 ailanto_buffer <- ailanto %>% 
-  st_buffer(dist = 10)
+  sf::st_buffer(dist = 10)
 
 # 2.1.2. Guardamos para comprobación posterior en QGIS
-st_write(
+sf::st_write(
   ailanto_buffer,
   here("data/ailanto/ailanto_buffer.gpkg"),
   quiet = TRUE,
@@ -77,19 +81,19 @@ st_write(
 
 # 2.2. Carga de la capa de la "red de carreteras de Andalucía"
 # 2.2.1. Carga y recorte al 'bounding box' de la capa de presencias
-carreteras <- st_read(
-  here("data/infraestructura/infraestructura.gpkg"),
+carreteras <- sf::st_read(
+  here::here("data/infraestructura/infraestructura.gpkg"),
   layer = "T09_14_RedCarreteras" # Comprobar en QGIS
 ) %>% 
-  st_filter(ailanto_buffer, .predicate = st_intersects)
+  sf::st_filter(ailanto_buffer, .predicate = st_intersects)
 
 # 2.2.2. Comprobación visual
 plot(carreteras$Shape)
 
 # 2.3. Guardado en disco
-st_write(
+sf::st_write(
   carreteras,
-  here("data/infraestructura/carreteras.gpkg"),
+  here::here("data/variables/variables_geograficas/carreteras/carreteras.gpkg"),
   quiet = TRUE,
   delete_dsn = TRUE
 )
@@ -97,16 +101,16 @@ st_write(
 # 2.4. 'Buffer' de las carreteras (nuestro ROI)
 # 2.4.1. Calculamos el buffer de 20 metros
 carreteras_buffer <- carreteras$Shape %>% 
-  st_buffer(dist = 20) %>% # Aplicamos buffer de 20 metros
-  st_union() # Fusión de todos los polígonos (multipolígono)
+  sf::st_buffer(dist = 20) %>% # Aplicamos buffer de 20 metros
+  sf::st_union() # Fusión de todos los polígonos (multipolígono)
 
 # 2.4.2. Comprobación visual
 plot(carreteras_buffer)
 
 # 2.4.3. Guardamos el resultado
-st_write(
+sf::st_write(
   carreteras_buffer,
-  here("data/infraestructura/carreteras_buffer.gpkg"),
+  here::here("data/infraestructura/carreteras_buffer.gpkg"),
   quiet = TRUE,
   delete_dsn = TRUE
 )
@@ -116,9 +120,9 @@ st_write(
 roi <- st_union(ailanto_buffer, carreteras_buffer)
 
 # 2.5.2. Guardado del ROI
-st_write(
+sf::st_write(
   roi,
-  here("data/roi/roi.shp"),
+  here::here("data/roi/roi.shp"),
   quiet = TRUE,
   delete_dsn = TRUE
 )
@@ -126,7 +130,7 @@ st_write(
 # 2.6. Rasterización del ROI
 # 2.6.1. Creamos el raster
 roi_rast <- roi %>% 
-  rasterize()
+  terra::rasterize(radiacion)
 ```
 
 ## Evolución periodo 2008-2023
@@ -136,17 +140,16 @@ roi_rast <- roi %>%
 
 # 3. Obtención de la evolución del ailanto (diferencia 2023 - 2008)
 # 3.1. Carga de la capa de todos los polígonos
-ailanto <- st_read(
-  here("data/ailanto/ailanthus_all.shp")
+ailanto <- sf::st_read(
+  here::here("data/ailanto/ailanthus_all.shp")
 )
 
 # 3.2. Obtención de los polígonos correspondientes al año 2008 y 2023
 # 3.2.1. '2008'
 # 3.2.1.1. Selección y filtrado
 presencias_2008 <- ailanto %>% 
-  filter(Year == 2008) %>% 
-  select(geometry, ID, Road_side, Altitude_m) %>% 
-  select(
+  dplyr::filter(Year == 2008) %>% 
+  dplyr::select(
     geometry, 
     ID, 
     arcen = Road_side,    
@@ -154,10 +157,10 @@ presencias_2008 <- ailanto %>%
   )
 
 # 3.2.1.2. Comprobación visual
-mapview(presencias_2008)
+mapview::mapview(presencias_2008)
 
 # 3.2.1.3. Guardado
-st_write(
+sf::st_write(
   presencias_2008,
   here("data/ailanto/presnecias_2008.gpkg"),
   quiet = TRUE,
@@ -167,9 +170,8 @@ st_write(
 # 3.2.2. '2023'
 # 3.2.2.1. Selección y filtrado
 presencias_2023 <- ailanto %>% 
-  filter(Year == 2023) %>% 
-  select(geometry, ID, Road_side, Altitude_m) %>% 
-  select(
+  dplyr::filter(Year == 2023) %>% 
+  dplyr::select(
     geometry, 
     ID, 
     arcen = Road_side,    
@@ -177,11 +179,11 @@ presencias_2023 <- ailanto %>%
   )
 
 # 3.2.2.2. Comprobación visual
-mapview(presencias_2023) +
-  mapview(presencias_2008)
+mapview::mapview(presencias_2023) +
+  mapview::mapview(presencias_2008)
 
 # 3.2.2.3. Guardado
-st_write(
+sf::st_write(
   presencias_2023,
   here("data/ailanto/presnecias_2023.gpkg"),
   quiet = TRUE,
@@ -190,17 +192,17 @@ st_write(
 
 # 3.3. Obtención de la invasión en el periodo de tiempo 2008-2023
 # 3.3.1. Aplicar diferencia
-presencias_2008_2023 <- st_difference(presencias_2023, presencias_2008)
+presencias_2008_2023 <- sf::st_difference(presencias_2023, presencias_2008)
 
 # 3.3.1. Comprobación visual
-mapview(presencias_2023) +
-  mapview(presencias_2008) +
-  mapview(presencias_2008_2023)
+mapview::mapview(presencias_2023) +
+  mapview::mapview(presencias_2008) +
+  mapview::mapview(presencias_2008_2023)
 
 # 3.3.3. Guardado
-st_write(
+sf::st_write(
   presencias_2008_2023,
-  here("data/ailanto/presnecias_2008_2023.gpkg"),
+  here::here("data/ailanto/presencias_2008_2023.gpkg"),
   quiet = TRUE,
   delete_dsn = TRUE
 )
@@ -210,53 +212,149 @@ rm(presencias_2008, presencias_2023)
 gc(full = TRUE)
 ```
 
-# LiDAR
+# Variables
 
-## Limpieza LiDAR
+## Variables abióticas
+
+### Métricas del dosel
 
 ```{r}
-#| label: limpieza-lidar
+#| label: normalizacion-teselas
 
-# 1. Configuración de parámetros globales
-vuelos_ids <- 1:3
-crs_objetivo <- st_crs(25830)
+# 3. Normalización de los puntos de las teselas LiDAR
+# 3.1. Especificar vuelos LiDAR
+conjuntos_lidar <- c("lidar1", "lidar2", "lidar3")
 
-# 2. Bucle iterativo por cada vuelo
-for (i in vuelos_ids) {
+# 3.2. Normalización iterativa de los datos LiDAR de cada uno de los vuelos
+for (conjunto in conjuntos_lidar) {
+  # Carga de teselas originales
+  rutas_teselas <- list.files(
+      path = file.path("data/lidar", conjunto),
+      pattern = "\\.laz$",
+      full.names = TRUE
+    )
   
-  # Definición de rutas dinámicas
-  dir_entrada <- here(paste0("data/lidar/lidar", i))
-  dir_salida  <- here(paste0("data/lidar/lidar", i, "_clean"))
+  teselas <- lidR::readLAScatalog(
+    folder = rutas_teselas, 
+    select = "xyzcrn", 
+    filter = "-drop_z_below 0"
+  )
   
-  if (!dir.exists(dir_salida)) dir.create(dir_salida, recursive = TRUE)
+  errores <- las_check(teselas, print = TRUE)
   
-  # Listar archivos de la carpeta actual
-  ficheros <- list.files(dir_entrada, pattern = "\\.la[sz]$", full.names = TRUE)
-  
-  for (f in ficheros) {
-    nombre_fichero <- basename(f)
-    
-    # Comprobación rápida del encabezado
-    header <- readLASheader(f)
-    crs_actual <- st_crs(header)
-    
-    # Condición: Si el CRS es incorrecto o si queremos asegurar limpieza de VLRs
-    # (Recomendado procesar todos para evitar el error de 'Inconsistent VLR')
-    # Lectura con filtro de limpieza para outliers negativos
-    las <- readLAS(f, select = "xyzcrn", filter = "-drop_z_below 0")
-    
-    if (!is.empty(las)) {
-      # Estandarización de metadatos espaciales
-      st_crs(las) <- crs_objetivo
-      
-      # Escritura en la carpeta limpia
-      writeLAS(las, file.path(dir_salida, nombre_fichero))
-    }
+  # Normalización de los puntos de las teselas LiDAR
+  lidR::opt_output_files(teselas) <- {
+    dir.create(here::here("data/lidar", conjunto, "norm"), recursive = TRUE, showWarnings = FALSE)
+    file.path(here::here("data/lidar", conjunto, "norm"), "{ORIGINALFILENAME}_norm")
   }
+  
+  terra::(teselas) <- TRUE
+
+  teselas_n <- lidR::normalize_height(teselas, tin())
+  
+  # Comprobación
+  rutas_teselas_n <- list.files(
+    path = file.path("data/lidar", conjunto, "norm"),
+    pattern = "\\.laz$",
+    full.names = TRUE
+  )
+  
+  teselas_n <- lidR::readLAScatalog(
+    folder = rutas_teselas_n, 
+    select = "xyzcrn", 
+    filter = "-drop_z_below 0"
+  )
+  
+  errores_tin_n <- las_check(teselas_n, print = TRUE)
+  
+  # Limpieza de la memoria
+  rm(teselas, teselas_n, rutas_teselas, rutas_teselas_n, errores, errores_tin_n)
+  gc(full = TRUE)
+  terra::tmpFiles(remove = TRUE)
 }
 ```
 
-## MDE
+
+```{r}
+#| label: metricas-dosel
+
+# 4. Cálculo de las métricas de dosel para cada uno de los conjuntos de datos LiDAR
+for (conjunto in conjuntos_lidar) {
+  # Carga de teselas 
+  teselas_n <- lidR::readLAScatalog(
+    folder = list.files(
+      path = file.path("data/lidar", conjunto, "norm"),
+      pattern = "\\.laz$",
+      full.names = TRUE
+    ), 
+    select = "xyzcrn", 
+    filter = "-drop_z_below 0"
+  )
+
+  # Cálculo de las métricas de dosel
+  md <- pixel_metrics(
+    teselas_n,
+    func = ~metrics_dispersion(z = Z, dz = 2, zmax = 56.5),
+    res = 10
+  ) %>% 
+    terra::crop(roi) %>% 
+    terra::mask(roi)
+
+  # Guardado
+  terra::writeRaster(md, here::here(paste0("data/md/md_", conjunto, ".tif")))
+  
+  # Limpieza de la memoria
+  rm(md, teselas_n)
+  gc(full = TRUE)
+  terra::tmpFiles(remove = TRUE)
+}
+```
+
+## Variables del relieve
+
+### Radiación
+
+```{r}
+#| label: radiacion
+#| message: false
+#| warning: false
+#| error: false
+
+# 1. Carga de la capa de radiación y del ROI
+plot(
+  radiacion <- terra::rast(here::here("data/variables/radiacion/s00.tif"))
+)
+
+roi <- sf::st_read(here::here())
+
+# 2. Asignación de CRS en caso de que aun no lo esté
+terra::crs(radiacion) <- "EPSG:25830" # Esto se comprobó empleando QGIS
+
+# 3. Recorte a la extensión de Andalucía
+radiacion <- radiacion %>% 
+  terra::crop(roi) %>% 
+  terra::mask(roi)
+
+# 4. Reproyección al CRS común
+if(terra::crs(radiacion) != terra::crs(roi)) { 
+  message("Los CRSs no coinciden; reproyectando a CRS común")
+  radiacion <- terra::project(radiacion, terra::crs(roi), method = "bilinear")
+}
+
+# 5. Guardamos el resultado
+terra::writeRaster(
+  radiacion,
+  here::here("data/variables/radiacion/radiacion.tif"),
+  overwrite = TRUE
+)
+
+# 6. Liberamos memoria
+rm(radiacion, roi)
+gc(full = TRUE)
+terra::tmpFiles(remove = TRUE)
+```
+
+### MDE
 
 ```{r}
 #| label: mde
@@ -264,39 +362,45 @@ for (i in vuelos_ids) {
 # 2. Cálculo del Modelo Digital de Elevaciones
 # 2.1. Carga y validación de los datos LiDAR
 # 2.1.1. Leemos los metadatos de las teselas (sin cargarlas en RAM)
-teselas <- readLAScatalog(
-  "data/lidar/lidar3",
+teselas <- lidR::readLAScatalog(
+  folder = "data/lidar/lidar3",
   select = "xyzcrn", 
   filter = "-drop_z_below 0"
 )
 
 # 2.1.2. Validamos los datos
-errores <- las_check(teselas, print = TRUE)
+errores <- lidR::las_check(teselas, print = TRUE)
 
 # 2.2. Cálculo del MDE
-# 2.2.1. Configuración de la escritura en disco
-opt_output_files(teselas) <- here("data/mde/mde")
+# 2.2.1. Configuración del catálogo
+lidR::opt_output_files(teselas) <- here("data/mde/mde3_knnidw_{XLEFT}_{YBOTTOM}")
+lidR::opt_select(teselas) <- "xyz" # Selección de las variables espaciales a emplear en el cálculo
+lidR::opt_laz_compression(teselas) <- TRUE # Formato comprimido de salida
+lidR::opt_chunk_size(teselas) <- 0  # Procesamiento individual de cada archivo 
+lidR::opt_chunk_buffer(teselas) <- 30 
 
-# 2.2.2. Selección de las variables espaciales a emplear en el cálculo
-opt_select(teselas) <- "xyz"
-
-# 2.2.3. Configurar formato comprimido de salida
-opt_laz_compression(teselas) <- TRUE
-
-# 2.2.4. Forzar el CRS correcto a todo el catálogo
-# st_crs(teselas) <- 25830
+# 2.2.4. Borrado preventivo
+dir_mde <- here::here("data/mde")
+if (dir.exists(dir_mde)) unlink(dir_mde, recursive = TRUE)
+dir.create(dir_mde, recursive = TRUE)
 
 # 2.2.5. Función de cálculo del MDE
-lidR::rasterize_terrain(
+mde <- lidR::rasterize_terrain(
   teselas,
   res = 10,
-  algorithm = tin(),
+  algorithm = knnidw(),
   overwrite = TRUE
 )
 
 # 2.2.6. Comprobación visual
-mde <- rast("data/mde/mde.tif")
 plot(mde)
+
+# 2.2.7. Guardado en memoria
+terra::writeRaster(
+  mde, 
+  "data/mde/mde3_knnidw.tif", 
+  overwrite = TRUE
+)
 
 # 2.3. Liberamos memoria
 rm(mde)
@@ -304,138 +408,83 @@ gc(full = TRUE)
 terra::tmpFiles(remove = TRUE)
 
 # 2.4. Restaurar atributos del catálogo
-opt_select(teselas) <- "xyzcrn"
+lidR::opt_select(teselas) <- "xyzcrn"
 ```
 
-## Métricas del dosel
+## Variables ambientales
 
-### Normalización de las teselas
+## Variables geográficas
 
-```{r}
-#| label: normalizacion-teselas
-
-# 3. Normalización de los puntos de las teselas LiDAR
-# 3.1. Especificar vuelos LiDAR
-vuelos <- list(
-  lidar1 = "lidar1",
-  lidar2 = "lidar2",
-  lidar3 = "lidar3"
-)
-
-# 3.2. Normalización iterativa de los datos LiDAR de cada uno de los vuelo
-teselas_normalizadas <- lapply(
-  names(vuelos),
-  function(vuelo) {
-    # Carga de las teselas
-    teselas <- readLAScatalog(
-      here(paste0("data/lidar/lidar", vuelo)),
-      select = "xyzcrn", 
-      filter = "-drop_z_below 0"
-    )
-
-    # Configurar salida del catálogo
-    opt_output_files(teselas) <- {
-      dir.create(here(paste0("data/lidar/", vuelo, "/norm")), recursive = TRUE, showWarnings = FALSE)
-      file.path(here(paste0("data/lidar/", vuelo, "/norm")), paste0(vuelo, "_{ORIGINALFILENAME}"))
-    }
-
-    # Configurar formato comprimido de salida
-    opt_laz_compression(teselas) <- TRUE
-    
-    # Normalización
-    teselas_n <- lidR::normalize_height(
-      las = teselas, 
-      algorithm = kriging(),
-      overwrite = TRUE
-    ) 
-
-    # Recorte a la extensión del ROI
-    teselas_n_rec <- clip_roi(
-      las = teselas_n,
-      geometry = roi      
-    )
-
-    # Lista con los resultados
-    return(teselas_n_rec)
-  }
-)
-```
-
-### Modelo Digital de Superficies
+### Distancia a núcleos urbanos
 
 ```{r}
-#| label: mds
+#| label: nucleos
 
-# 4. Cálculo del los Modelos Digitales de Supeficies
-# 4.1. Carga de las teselas normalizadas
-# 4.1.1. Vector con los números de los vuelos
-vuelos_n <- 1:3
-
-# 4.1.2. Creamos las listas donde almacenar los resultados de cada proceso
-rutas_teselas_n <- list()
-teselas_n <- list()
-errores_n <- list()
-
-# 4.1.3. Carga y validación iterativa de las teselas de cada vuelo
-for (i in vuelos_n) {
-  # Listamos las teselas normalizadas
-  rutas_teselas_n[[i]] <- list.files(
-    path = paste0("data/lidar/lidar", i, "/norm"),
-    full.names = TRUE
-  )
-  
-  # Cargamos las teselas como un 'catalogo'
-  teselas_n[[i]] <- readLAScatalog(
-    rutas_teselas_n[[i]], 
-    select = "xyzcrn", 
-    filter = "-drop_z_below 0"
-  )
-  
-  # Validación del catálogo
-  errores_n[[i]] <- las_check(
-    teselas_n[[i]], 
-    print = TRUE
-  )
-}
-
-# 4.2. Cálculo de cada uno de los MDSs
-```
-
-### Detección individual de árboles
-
-```{r}
-#| label: tree-detection
-
-# 4. Detección individual de árboles (de forma iterativa para cada vuelo) 
-for(i in vuelos_n) {
-  # Detección individual de árboles
-  itd <- locate_trees(
-    las = teselas_n[[i]], # Especificamos el catálogo/archivo LAS a procesar
-    algorithm = lmf( # Selección del algoritmo 
-      ws = 6,
-      shape = "circular"
+# 1. Creamos la función de cálculo del ráster de distancia
+raster_distancia <- function(vect, output_rast, output_distancia) {
+  # Rasterización de la capa vectorial de entrada
+  vect_rast <- vect %>% 
+    rasterize(
+      rast(here::here("data/variables/bioclimaticas/bioclimaticas.tif")),
+      field = 1
     )
+
+  # Guardamos el resultado
+  writeRaster(vect_rast, here::here(output_rast), overwrite = TRUE)
+
+  # Creamos el ráster de distancia
+  plot(
+    vect_distancia <- vect_rast %>% 
+      distance() %>% 
+      crop(sf::st_read(here::here("data/variables/roi/roi.gpkg"))) %>% 
+      mask(sf::st_read(here::here("data/variables/roi/roi.gpkg")))
   )
 
-  # Reestablecemos el conteo de copas
-  itd$treeID <- 1:nrow(itd)
+  # Guardamos el ráster de distancia
+  writeRaster(vect_distancia, here::here(output_distancia), overwrite = TRUE)
 
-  # Guardado de la capa
-  sf::st_write(
-    itd,
-    here(paste0("data/it/itd/itd_", i, ".gpkg")), 
-    quiet = TRUE,
-    delete_dsn = TRUE
-  )
-
-  # Limpiamos memoria
-  rm(itd)
+  # Limpiamos el entorno
+  rm(vect_rast)
   gc(full = TRUE)
+  terra::tmpFiles(remove = TRUE)
+
+  # Definimos la salida de la función
+  return(vect_distancia)
 }
+
+# 2. Calculo del ráster de distancia a núcleos urbanos
+nucleos_distancia <-raster_distancia(
+  st_read(
+    here("data/variables/nucleos/nucleos.gpkg"),
+    layer = "T07_07_NucleosUrbanos_pol" 
+  ),
+  output_rast = "data/variables/nucleos/nucleos_rast.tif",
+  output_distancia = "data/nucleos/variables/nucleos_distancia.tif"
+)
+
+# Limpiar entorno
+rm(nucleos_distancia)
+gc(full = TRUE)
+terra::tmpFiles(remove = TRUE)
 ```
 
-### Segmentación individual de los árboles
+### Distancia a cauces
 
 ```{r}
-#| label: tree-segmentation
+#| label: cauces
+
+# Cálculo del ráster de distancia a cauces
+cauces_distancia <- raster_distancia(
+  st_read(
+    here("data/variables/cauces/cauces.gpkg"),
+    layer = "T03_01_Rio" 
+  ),
+  output_rast = "data/variables/cauces/cauces_rast.tif",
+  output_distancia = "data/variables/cauces/cauces_distancia.tif"
+)
+
+# Limpiar entorno
+rm(cauces_distancia)
+gc(full = TRUE)
+terra::tmpFiles(remove = TRUE)
 ```

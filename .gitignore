@@ -1,2 +1,6 @@
 docs/
 data/
+.vscode/
+output/glm
+output/glm_univariantes.zip
+script/modelos/prueba/

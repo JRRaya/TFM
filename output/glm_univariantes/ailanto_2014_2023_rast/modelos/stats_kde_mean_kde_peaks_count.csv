@@ -1,0 +1,3 @@
+"","Estimate","Std. Error","z value","Pr(>|z|)","variable","nagelkerke"
+"(Intercept)",-0.489182244744158,0.495517974197906,-0.987213926065945,0.323537776195583,"kde_mean_kde_peaks_count",0.0113881596765344
+"kde_mean_kde_peaks_count",0.380597359749108,0.362151946462532,1.05093280173349,0.293289453852806,"kde_mean_kde_peaks_count",0.0113881596765344
