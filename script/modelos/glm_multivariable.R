@@ -31,6 +31,7 @@ n_0 <- nrow(df_0)
 n_1 <- nrow(df_1)
 
 set.seed(123) # Para reproducibilidad científica
+
 if (n_0 > n_1) {
   df_0_sub <- df_0[sample(nrow(df_0), n_1), ]
   df_balanceado <- bind_rows(df_0_sub, df_1)

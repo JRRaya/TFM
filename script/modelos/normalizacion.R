@@ -3,6 +3,7 @@
 rm(list = ls(all.names = TRUE))
 pacman::p_unload(pacman::p_loaded(), character.only = TRUE)
 gc(full = TRUE)
+terra::tmpFiles(remove = TRUE)
 
 # 1.2. Cargamos las librerías a emplear
 pacman::p_load(terra, sf, dplyr, here)
@@ -54,8 +55,16 @@ variables_geograficas <- list.files(
 # 2.4. Variables del relieve
 variables_relieve <- list(
   c(
-    "data/variables/variables_relieve/radiacion/radiacion.tif",
-    "data/variables/variables_relieve/mde/mde3_knnidw.tif"
+    "data/variables/variables_relieve/radiacion/radiacion_total.tif",
+    "data/variables/variables_relieve/radiacion/radiacion_directa.tif",
+    "data/variables/variables_relieve/mde/mde.tif",
+    "data/variables/variables_relieve/slope/slope_grados.tif",
+    "data/variables/variables_relieve/twi/sca.tif",
+    "data/variables/variables_relieve/twi/twi.tif",
+    "data/variables/variables_relieve/tpi/tpi.tif",
+    "data/variables/variables_relieve/tri/tri.tif",
+    "data/variables/variables_relieve/aspect/aspect.tif",
+    "data/variables/variables_relieve/aspect/aspect_clas.tif"
   )
 )
 

@@ -55,9 +55,7 @@ Sys.setenv(GTIFF_SRS_SOURCE = "EPSG")
 options(rgdal_show_exportToProj4_warnings = "none")
 
 # 1.5. Forzar un solo hilo para evitar colisiones de archivos temporales
-<<<<<<< HEAD
 lidR::set_lidr_threads(1)
-=======
 set_lidr_threads(1)
 ```
 
@@ -73,12 +71,10 @@ radiacion <- rast(
 
 # 2. Asignación de CRS en caso de que aun no lo esté
 crs(radiacion) <- "EPSG:25830" # Esto se comprobó empleando QGIS
->>>>>>> 343b275954e89128036943498da6b5d721f2a95b
 ```
 
 # Área de Estudio
 
-<<<<<<< HEAD
 ## Buffer de la carretera (ROI)
 
 ```{r}
@@ -152,8 +148,6 @@ roi_rast <- roi %>%
   terra::rasterize(radiacion)
 ```
 
-=======
->>>>>>> 343b275954e89128036943498da6b5d721f2a95b
 ## Evolución periodo 2008-2023
 
 ```{r}
@@ -233,9 +227,7 @@ rm(presencias_2008, presencias_2023)
 gc(full = TRUE)
 ```
 
-<<<<<<< HEAD
 # Variables
-=======
 ## Buffer de la carretera (ROI)
 
 ```{r}
@@ -324,18 +316,14 @@ writeRaster(
 ```
 
 # LiDAR
->>>>>>> 343b275954e89128036943498da6b5d721f2a95b
 
 ## Variables abióticas
 
 ### Métricas del dosel
 
 ```{r}
-<<<<<<< HEAD
 #| label: normalizacion-teselas
-=======
 #| label: limpieza-y-retileado-lidar (IA)
->>>>>>> 343b275954e89128036943498da6b5d721f2a95b
 
 # 3. Normalización de los puntos de las teselas LiDAR
 # 3.1. Especificar vuelos LiDAR
@@ -350,7 +338,6 @@ for (conjunto in conjuntos_lidar) {
       full.names = TRUE
     )
   
-<<<<<<< HEAD
   teselas <- lidR::readLAScatalog(
     folder = rutas_teselas, 
     select = "xyzcrn", 
@@ -358,12 +345,10 @@ for (conjunto in conjuntos_lidar) {
   )
   
   errores <- las_check(teselas, print = TRUE)
-=======
   # Definición de rutas dinámicas
   dir_entrada <- here(paste0("data/lidar/lidar", i))
   dir_salida  <- here(paste0("data/lidar/lidar", i, "_clean"))
   if (!dir.exists(dir_salida)) dir.create(dir_salida, recursive = TRUE)
->>>>>>> 343b275954e89128036943498da6b5d721f2a95b
   
   # Normalización de los puntos de las teselas LiDAR
   lidR::opt_output_files(teselas) <- {
@@ -485,13 +470,8 @@ terra::tmpFiles(remove = TRUE)
 # 2. Cálculo del Modelo Digital de Elevaciones
 # 2.1. Carga y validación de los datos LiDAR
 # 2.1.1. Leemos los metadatos de las teselas (sin cargarlas en RAM)
-<<<<<<< HEAD
 teselas <- lidR::readLAScatalog(
-  folder = "data/lidar/lidar3",
-=======
-teselas <- readLAScatalog(
   "data/lidar/lidar3_clean",
->>>>>>> 343b275954e89128036943498da6b5d721f2a95b
   select = "xyzcrn", 
   filter = "-drop_z_below 0"
 )
@@ -501,7 +481,6 @@ errores <- lidR::las_check(teselas, print = TRUE)
 
 # 2.2. Cálculo del MDE
 # 2.2.1. Configuración del catálogo
-<<<<<<< HEAD
 lidR::opt_output_files(teselas) <- here("data/mde/mde3_knnidw_{XLEFT}_{YBOTTOM}")
 lidR::opt_select(teselas) <- "xyz" # Selección de las variables espaciales a emplear en el cálculo
 lidR::opt_laz_compression(teselas) <- TRUE # Formato comprimido de salida
@@ -510,7 +489,6 @@ lidR::opt_chunk_buffer(teselas) <- 30
 
 # 2.2.4. Borrado preventivo
 dir_mde <- here::here("data/mde")
-=======
 opt_output_files(teselas) <- here("data/mde/mde3_knnidw_{XLEFT}_{YBOTTOM}")
 opt_select(teselas) <- "xyz" # Selección de las variables espaciales a emplear en el cálculo
 opt_laz_compression(teselas) <- TRUE # Formato comprimido de salida
@@ -519,16 +497,12 @@ opt_chunk_buffer(teselas) <- 30
 
 # 2.2.4. Borrado preventivo
 dir_mde <- here("data/mde")
->>>>>>> 343b275954e89128036943498da6b5d721f2a95b
 if (dir.exists(dir_mde)) unlink(dir_mde, recursive = TRUE)
 dir.create(dir_mde, recursive = TRUE)
 
 # 2.2.5. Función de cálculo del MDE
-<<<<<<< HEAD
 mde <- lidR::rasterize_terrain(
-=======
 mde <- rasterize_terrain(
->>>>>>> 343b275954e89128036943498da6b5d721f2a95b
   teselas,
   res = 10,
   algorithm = knnidw(),
@@ -539,11 +513,8 @@ mde <- rasterize_terrain(
 plot(mde)
 
 # 2.2.7. Guardado en memoria
-<<<<<<< HEAD
 terra::writeRaster(
-=======
 writeRaster(
->>>>>>> 343b275954e89128036943498da6b5d721f2a95b
   mde, 
   "data/mde/mde3_knnidw.tif", 
   overwrite = TRUE
@@ -567,7 +538,6 @@ lidR::opt_select(teselas) <- "xyzcrn"
 ```{r}
 #| label: nucleos
 
-<<<<<<< HEAD
 # 1. Creamos la función de cálculo del ráster de distancia
 raster_distancia <- function(vect, output_rast, output_distancia) {
   # Rasterización de la capa vectorial de entrada
@@ -586,7 +556,6 @@ raster_distancia <- function(vect, output_rast, output_distancia) {
       distance() %>% 
       crop(sf::st_read(here::here("data/variables/roi/roi.gpkg"))) %>% 
       mask(sf::st_read(here::here("data/variables/roi/roi.gpkg")))
-=======
 # 3. Normalización de los puntos de las teselas LiDAR
 # 3.1. Especificar vuelos LiDAR
 vuelos <- list(
@@ -728,7 +697,6 @@ for(i in vuelos_n) {
       ws = 6,
       shape = "circular"
     )
->>>>>>> 343b275954e89128036943498da6b5d721f2a95b
   )
 
   # Guardamos el ráster de distancia
@@ -762,7 +730,6 @@ terra::tmpFiles(remove = TRUE)
 ### Distancia a cauces
 
 ```{r}
-<<<<<<< HEAD
 #| label: cauces
 
 # Cálculo del ráster de distancia a cauces
@@ -779,7 +746,9 @@ cauces_distancia <- raster_distancia(
 rm(cauces_distancia)
 gc(full = TRUE)
 terra::tmpFiles(remove = TRUE)
-=======
+```
+
+```{r}
 #| label: tree-segmentation
 
 # 1. Cálculo iterativo de la segmentación individual de árboles para cada vuelo
@@ -844,5 +813,4 @@ writeRaster(
   "data/radiacion/radiacion.tif",
   overwrite = TRUE
 )
->>>>>>> 343b275954e89128036943498da6b5d721f2a95b
 ```
