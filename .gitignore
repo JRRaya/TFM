@@ -1,6 +1,10 @@
 docs/
 data/
+temp/
 .vscode/
-output/glm
-output/glm_univariantes.zip
+output/
+script/modelado/images/
 script/modelos/prueba/
+script/FHMPTCI/
+.gitignore
+.Renviron

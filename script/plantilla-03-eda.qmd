@@ -1,0 +1,1920 @@
+# Análisis Exploratorio de los Datos
+
+## Análisis univariante
+
+```{r}
+#| label: densidad
+#| eval: false
+
+# 1. Limpieza y paquetes
+rm(list = ls(all.names = TRUE))
+pacman::p_unload(pacman::p_loaded(), character.only = TRUE)
+base::gc(full = TRUE)
+
+pacman::p_load(dplyr, here, ggpubr, furrr, fs, stringr)
+
+# 2. Paralelismo
+future::plan(future::multisession, workers = 10L)
+
+# 3. Funciones auxiliares
+# 3.1. Detectar si una variable es categórica
+es_categorica <- function(x) {
+  is.factor(x) || is.character(x) || length(unique(na.omit(x))) <= 4L
+}
+
+# 3.2. Detectar si conviene escala logarítmica
+usar_log <- function(x) {
+  x <- x[is.finite(x)]
+  if (length(x) == 0 || any(x < 0)) return(FALSE)
+  x_pos <- x[x > 0]
+  if (length(x_pos) < 10L) return(FALSE)
+  # Criterio 1: rango amplio entre positivos
+  rango_amplio <- (max(x_pos) / min(x_pos)) > 50
+  # Criterio 2: distribución muy sesgada (percentil 95 >> mediana)
+  sesgo_alto   <- (quantile(x_pos, 0.95) / median(x_pos)) > 5
+  rango_amplio || sesgo_alto
+}
+
+# 3.3. Aplicar escala log a un ggplot ya construido
+aplicar_log <- function(p, log_x = FALSE, log_y = FALSE) {
+  if (log_x) p <- p + ggplot2::scale_x_log10()
+  if (log_y) p <- p + ggplot2::scale_y_log10()
+  p
+}
+
+# 3.3. Generar gráfico de densidad/barras para una variable predictora
+procesar_variable <- function(i, input_df, predicha, dir_graficos) {
+  # 1. Subconjunto y limpieza
+  df_var <- input_df[, c(predicha, i), drop = FALSE] |>
+    dplyr::filter(is.finite(.data[[predicha]])) |>
+    dplyr::mutate(clase = factor(.data[[predicha]]))
+
+  # 2. Control de calidad
+  if (sum(df_var[[predicha]] == 1L) < 10L || sum(df_var[[predicha]] == 0L) < 10L) return(NULL)
+
+  # 3. Gráfico según tipo de variable
+  if (es_categorica(input_df[[i]])) {
+    df_var <- dplyr::mutate(df_var, across(all_of(i), factor))
+
+    df_agg <- df_var |>
+      dplyr::count(clase, .data[[i]]) |>
+      dplyr::rename(categoria = all_of(i))
+
+    p <- ggpubr::ggbarplot(
+      df_agg,
+      x        = "categoria",
+      y        = "n",
+      fill     = "clase",
+      color    = "clase",
+      palette  = c("#2166AC", "#8C2D04"),
+      position = position_dodge(0.7),
+      title    = paste("Distribución:", i),
+      xlab     = i,
+      ylab     = "Conteo"
+    )
+  } else {
+    escala_log <- usar_log(df_var[[i]])
+
+    p <- ggpubr::ggdensity(
+      df_var,
+      x       = i,
+      color   = "clase",
+      fill    = "clase",
+      rug     = TRUE,
+      palette = c("#2166AC", "#8C2D04"),
+      add     = "mean",
+      title   = paste("Densidad:", i),
+      xlab    = if (escala_log) paste0(i, " (log\u2081\u2080)") else i,
+      ylab    = "Densidad"
+    )
+    p <- aplicar_log(p, log_x = escala_log)
+  }
+
+  # 4. Guardado
+  ggplot2::ggsave(
+    file.path(dir_graficos, paste0("densidad_", i, ".png")),
+    p,
+    width  = 8,
+    height = 5,
+    dpi    = 600
+  )
+
+  ggplot2::ggsave(
+    file.path(dir_graficos, "preview", paste0("densidad_", i, ".png")),
+    p,
+    width  = 7,
+    height = 3.5,
+    dpi    = 150
+  )
+
+  invisible(NULL)
+}
+
+# 3.4. Función de iteración paralela sobre cada variable predictora
+densidad <- function(input_df, ruta_salida) {
+  # 1. Detectar variable respuesta y predictoras
+  predicha    <- names(input_df)[grep("^(diferencia|presencia)_", names(input_df))][1]
+  predictoras <- setdiff(names(input_df), predicha)
+
+  # 2. Crear directorios de salida
+  purrr::walk(
+    file.path(ruta_salida, c("", "preview")),
+    dir.create,
+    recursive    = TRUE,
+    showWarnings = FALSE
+  )
+
+  # 3. Procesar en paralelo
+  furrr::future_walk(
+    .x = predictoras,
+    .f = function(i) procesar_variable(
+      i,
+      input_df,
+      predicha,
+      dir_graficos = ruta_salida
+    ),
+    .options = furrr::furrr_options(seed = TRUE)
+  )
+}
+
+# 4. Descubrimiento de datasets
+rds <- fs::dir_ls(
+  here::here("data/modelado/data_cleaning/balanceo"),
+  regexp  = "df_b_.*\\.rds$",
+  recurse = TRUE
+)
+
+# 5. Ejecución
+purrr::walk(rds, function(ruta_rds) {
+  densidad(
+    input_df    = readRDS(ruta_rds),
+    ruta_salida = here::here(
+      "data/modelado/eda/analisis_univariante/densidad",
+      stringr::str_extract(basename(ruta_rds), "\\d{4}_\\d{4}")
+    )
+  )
+})
+
+# 6. Cerrar paralelismo
+future::plan(future::sequential)
+```
+
+```{r}
+#| label: boxplot
+#| eval: false
+
+# 1. Limpieza y paquetes
+rm(list = ls(all.names = TRUE))
+pacman::p_unload(pacman::p_loaded(), character.only = TRUE)
+base::gc(full = TRUE)
+
+pacman::p_load(dplyr, here, ggpubr, furrr, fs, stringr)
+
+# 2. Paralelismo
+future::plan(future::multisession, workers = 10L)
+
+# 3. Funciones auxiliares
+# 3.1. Detectar si una variable es categórica
+es_categorica <- function(x) {
+  is.factor(x) || is.character(x) || length(unique(na.omit(x))) <= 4L
+}
+
+# 3.2. Detectar si conviene escala logarítmica
+usar_log <- function(x) {
+  x <- x[is.finite(x)]
+  if (length(x) == 0 || any(x < 0)) return(FALSE)
+  x_pos <- x[x > 0]
+  if (length(x_pos) < 10L) return(FALSE)
+  # Criterio 1: rango amplio entre positivos
+  rango_amplio <- (max(x_pos) / min(x_pos)) > 50
+  # Criterio 2: distribución muy sesgada (percentil 95 >> mediana)
+  sesgo_alto   <- (quantile(x_pos, 0.95) / median(x_pos)) > 5
+  rango_amplio || sesgo_alto
+}
+
+# 3.3. Aplicar escala log a un ggplot ya construido
+aplicar_log <- function(p, log_x = FALSE, log_y = FALSE) {
+  if (log_x) p <- p + ggplot2::scale_x_log10()
+  if (log_y) p <- p + ggplot2::scale_y_log10()
+  p
+}
+
+# 3.3. Generar gráfico de violin/balloon para una variable predictora
+procesar_variable <- function(i, input_df, predicha, dir_graficos) {
+  # 1. Subconjunto y limpieza
+  df_var <- input_df[, c(predicha, i), drop = FALSE] |>
+    dplyr::filter(is.finite(.data[[predicha]])) |>
+    dplyr::mutate(clase = factor(.data[[predicha]]))
+
+  # 2. Control de calidad
+  if (sum(df_var[[predicha]] == 1L) < 10L || sum(df_var[[predicha]] == 0L) < 10L) return(NULL)
+
+  # 3. Gráfico según tipo de variable
+  if (es_categorica(input_df[[i]])) {
+    df_var <- dplyr::mutate(df_var, across(all_of(i), factor))
+
+    # Tabla de frecuencias con nombres fijos para ggballoonplot
+    df_balloon <- df_var |>
+      dplyr::count(clase, .data[[i]]) |>
+      dplyr::rename(categoria = 2)
+
+    p <- ggpubr::ggballoonplot(
+      df_balloon,
+      x       = "categoria",
+      y       = "clase",
+      size    = "n",
+      fill    = "n",
+      ggtheme = ggpubr::theme_pubr(),
+      title   = paste("Frecuencia por clase:", i),
+      xlab    = i,
+      ylab    = predicha
+    )
+  } else {
+    escala_log <- usar_log(df_var[[i]])
+
+    p <- ggpubr::ggviolin(
+      df_var,
+      x          = "clase",
+      y          = i,
+      color      = "clase",
+      fill       = "clase",
+      palette    = c("#2166AC", "#8C2D04"),
+      add        = c("boxplot", "mean_point"),
+      add.params = list(fill = "white", width = 0.15),
+      title      = paste("Distribución:", i),
+      xlab       = predicha,
+      ylab       = if (escala_log) paste0(i, " (log\u2081\u2080)") else i
+    )
+    p <- aplicar_log(p, log_y = escala_log)
+  }
+
+  # 4. Guardado
+  ggplot2::ggsave(
+    file.path(dir_graficos, paste0("boxplot_", i, ".png")),
+    p,
+    width  = 8,
+    height = 5,
+    dpi    = 600
+  )
+
+  ggplot2::ggsave(
+    file.path(dir_graficos, "preview", paste0("boxplot_", i, ".png")),
+    p,
+    width  = 7,
+    height = 3.5,
+    dpi    = 150
+  )
+
+  invisible(NULL)
+}
+
+# 3.4. Función de iteración paralela sobre cada variable predictora
+boxplot <- function(input_df, ruta_salida) {
+  # 1. Detectar variable respuesta y predictoras
+  predicha    <- names(input_df)[grep("^(diferencia|presencia)_", names(input_df))][1]
+  predictoras <- setdiff(names(input_df), predicha)
+
+  # 2. Crear directorios de salida
+  purrr::walk(
+    file.path(ruta_salida, c("", "preview")),
+    dir.create,
+    recursive    = TRUE,
+    showWarnings = FALSE
+  )
+
+  # 3. Procesar en paralelo
+  furrr::future_walk(
+    .x = predictoras,
+    .f = function(i) procesar_variable(
+      i,
+      input_df,
+      predicha,
+      dir_graficos = ruta_salida
+    ),
+    .options = furrr::furrr_options(seed = TRUE)
+  )
+}
+
+# 4. Descubrimiento de datasets
+rds <- fs::dir_ls(
+  here::here("data/modelado/data_cleaning/balanceo"),
+  regexp  = "df_b_.*\\.rds$",
+  recurse = TRUE
+)
+
+# 5. Ejecución
+purrr::walk(rds, function(ruta_rds) {
+  boxplot(
+    input_df    = readRDS(ruta_rds),
+    ruta_salida = here::here(
+      "data/modelado/eda/analisis_univariante/boxplot",
+      stringr::str_extract(basename(ruta_rds), "\\d{4}_\\d{4}")
+    )
+  )
+})
+
+# 6. Cerrar paralelismo
+future::plan(future::sequential)
+```
+
+```{r}
+#| include: false
+#| label: distribuciones-graficos
+
+pacman::p_load(dplyr, fs, stringr, tibble, base64enc, purrr, here)
+
+indice <- fs::dir_ls(
+    here::here("data/modelos/eda/variables"),
+    regexp  = "preview/.*\\.png$",
+    recurse = TRUE
+  ) %>%
+  tibble::as_tibble_col(column_name = "ruta") %>%
+  dplyr::mutate(
+    periodo      = stringr::str_extract(ruta, "(?<=variables/)\\d{4}"),
+    archivo      = fs::path_file(ruta),
+    tipo_grafico = stringr::str_extract(archivo, "(densidad|cajas)(?=\\.png$)"),
+    variable     = stringr::str_remove(archivo, "_(densidad|cajas)\\.png$"),
+    b64          = purrr::map_chr(
+      ruta,
+      ~paste0("data:image/png;base64,", base64enc::base64encode(.x))
+    )
+  ) %>%
+  dplyr::filter(!is.na(periodo), !is.na(tipo_grafico), !is.na(variable)) %>%
+  dplyr::select(-ruta, -archivo)
+
+stopifnot(nrow(indice) > 0)
+
+ojs_define(indice = indice)
+```
+
+```{ojs}
+//| label: indice-distribuciones
+//| echo: false
+
+indice_rows = transpose(indice)
+```
+
+```{ojs}
+//| label: selector-periodo-distribuciones
+//| echo: false
+
+viewof periodo_sel = Inputs.select(
+  [...new Set(indice_rows.map(d => d.periodo))].sort(),
+  {label: "Periodo"}
+)
+```
+
+```{ojs}
+//| label: selector-variable-distribuciones
+//| echo: false
+
+viewof variable_sel = Inputs.select(
+  indice_rows
+    .filter(d => d.periodo === periodo_sel)
+    .map(d => d.variable)
+    .filter((v, i, a) => a.indexOf(v) === i)
+    .sort(),
+  {label: "Variable"}
+)
+```
+
+```{ojs}
+//| label: selector-grafico-distribuciones
+//| echo: false
+
+viewof tipo_sel = Inputs.select(
+  ["densidad", "cajas"],
+  {label: "Tipo de gráfico"}
+)
+```
+
+```{ojs}
+//| label: renderizado-distribuciones
+//| echo: false
+
+img_sel = (indice_rows.find(
+  d => d.periodo      === periodo_sel  &&
+       d.variable     === variable_sel &&
+       d.tipo_grafico === tipo_sel
+) ?? {b64: ""}).b64
+
+html`<img src="${img_sel}" style="width:100%; max-width:960px;">`
+```
+
+## Análisis multivariante
+
+### Variable respuesta - Variables independientes (Relación Lineal Logística)
+
+```{r}
+#| label: logit
+#| eval: false
+
+# 1. Limpieza y paquetes
+rm(list = ls(all.names = TRUE))
+pacman::p_unload(pacman::p_loaded(), character.only = TRUE)
+base::gc(full = TRUE)
+
+pacman::p_load(dplyr, here, ggpubr, stats, DescTools, furrr, fs, stringr)
+
+# 2. Paralelismo
+future::plan(future::multisession, workers = 10L)
+
+# 3. Funciones auxiliares
+# 3.1. Generar modelos y gráficos para una variable predictora
+procesar_variable <- function(i, input_df, predicha, dir_graficos, dir_modelos) {
+  # 1. Cargar matriz 'variable predicha - variable predictora'
+  df_var <- input_df[, c(predicha, i), drop = FALSE] |>
+    dplyr::filter(
+      is.finite(.data[[i]]) & is.finite(.data[[predicha]]) # Asegurar que ambas variables tienen valores no finitos
+    )
+
+  # 2. Control de calidad
+  if (sum(df_var[[predicha]] == 1L) < 10L || sum(df_var[[predicha]] == 0L) < 10L) return(NULL)
+
+  # 3. GLM logístico
+  m <- glm(
+    stats::as.formula(
+      paste(predicha, "~", i)
+    ),
+    data = df_var, 
+    family = stats::binomial(link = "logit")
+  )
+
+  # 4. Estadísticos
+  estadisticos <- summary(m)$coefficients |>
+    as.data.frame() |>
+    dplyr::mutate(
+      variable = i, 
+      nagelkerke = DescTools::PseudoR2(
+        m, 
+        which = "Nagelkerke"
+      )
+    )
+
+  # 5. Curva de respuesta logística
+  curva <- ggpubr::ggscatter(
+    df_var,
+    x     = i,
+    y     = predicha,
+    alpha = 0.25,
+    color = "#8C2D04",
+    size  = 1.2,
+    title    = paste("Curva de respuesta:", i),
+    subtitle = paste("Pseudo-R² Nagelkerke:", round(DescTools::PseudoR2(m, which = "Nagelkerke"), 3)),
+    xlab = i,
+    ylab = "Probabilidad de invasión"
+  ) +
+  ggplot2::geom_smooth(
+    method      = "glm",
+    formula     = y ~ x,
+    method.args = list(family = binomial),
+    color       = "#2166AC",
+    fill        = "#2166AC",
+    se          = TRUE
+  )
+
+  # 6. Guardado
+  write.csv(
+    estadisticos,
+    file.path(
+      dir_modelos, 
+      paste0("stats_", i, ".csv")
+    ), 
+    row.names = TRUE
+  )
+
+  ggplot2::ggsave(
+    file.path(dir_graficos, paste0("curva_", i, ".png")),
+    curva, 
+    width = 8, 
+    height = 5, 
+    dpi = 600 
+  )
+
+  ggplot2::ggsave(
+    file.path(dir_graficos, "preview", paste0("curva_", i, ".png")),
+    curva, 
+    width = 7, 
+    height = 3.5, 
+    dpi = 150
+  )
+
+  invisible(NULL)
+}
+
+# 3.2. Función de iteración paralela sobre cada variable explicativa
+logit <- function(input_df, ruta_salida) {
+  # 1. Detectar variable respuesta y variables predictoras del dataset
+  predicha <- names(input_df)[grep("^(diferencia|presencia)_", names(input_df))][1]
+  predictoras <- setdiff(names(input_df), predicha)
+
+  # 2. Asegurar binariedad (0/1) variable respuesta
+  input_df[[predicha]] <- if (is.factor(input_df[[predicha]])) {
+    as.integer(input_df[[predicha]]) - 1L
+  } else {
+    as.integer(input_df[[predicha]])
+  }
+
+  # 3. Crear directorios de salida
+  purrr::walk(
+    file.path(ruta_salida, c("graficos", "graficos/preview", "modelos")),
+    dir.create, 
+    recursive = TRUE, 
+    showWarnings = FALSE
+  )
+
+  # 4. Procesar paralelamento los modelos/gráficos
+  furrr::future_walk(
+    .x = predictoras,
+    .f = function(i) procesar_variable(
+      i, 
+      input_df, 
+      predicha,
+      dir_graficos = file.path(ruta_salida, "graficos"),
+      dir_modelos = file.path(ruta_salida, "modelos")
+    ),
+    .options = furrr::furrr_options(seed = TRUE)
+  )
+}
+
+# 5. Descubrimiento de datasets
+rds <- fs::dir_ls(
+  here::here("data/modelado/data_cleaning/balanceo"), 
+  regexp = "df_b_.*\\.rds$", 
+  recurse = TRUE
+)
+
+# 6. Ejecución
+purrr::walk(rds, function(ruta_rds) {
+  logit(
+    input_df = readRDS(ruta_rds),
+    ruta_salida = here::here(
+      "data/modelado/eda/analisis_bivariante/logit", 
+      stringr::str_extract(basename(ruta_rds), "\\d{4}_\\d{4}")
+    )
+  )
+})
+
+# 7. Cerrar paralelismo
+future::plan(future::sequential)
+```
+
+```{r}
+#| include: false
+#| label: logit-graficos
+
+# 1. Carga de paquetes
+pacman::p_load(dplyr, purrr, here, fs, stringr, tibble, stats, DescTools)
+
+# 2. Función de ajuste por variable
+ajustar_logit <- function(ruta) {
+
+  # 2.1. Identificar periodo y leer dataset
+  periodo <- stringr::str_extract(base::basename(ruta), "\\d{4}_\\d{4}")
+  df      <- base::readRDS(ruta)
+
+  # 2.2. Identificar variable predicha y predictoras numéricas
+  predicha    <- base::names(df)[base::grep("^diferencia_", base::names(df))][1]
+  predictoras <- df %>%
+    dplyr::select(-dplyr::all_of(predicha)) %>%
+    dplyr::select(where(is.numeric)) %>%
+    base::names()
+
+  # 2.3. Codificar variable respuesta como 0/1
+  df[[predicha]] <- if (is.factor(df[[predicha]])) {
+    base::as.integer(df[[predicha]]) - 1L
+  } else {
+    base::as.integer(df[[predicha]])
+  }
+
+  # 2.4. Ajustar GLM logístico por variable
+  resultados <- purrr::map(predictoras, function(i) {
+
+    dat <- df[, c(predicha, i), drop = FALSE] %>%
+      dplyr::filter(is.finite(.data[[i]]), is.finite(.data[[predicha]]))
+
+    if (base::sum(dat[[predicha]] == 1L) < 10L ||
+        base::sum(dat[[predicha]] == 0L) < 10L) return(NULL)
+
+    m <- tryCatch(
+      glm(
+        formula = as.formula(paste(predicha, "~", i)),
+        data    = dat,
+        family  = binomial(link = "logit")
+      ),
+      error = function(e) NULL
+    )
+    if (is.null(m)) return(NULL)
+
+    # 2.4.1. Pseudo-R²
+    r2 <- tryCatch(
+      DescTools::PseudoR2(m, which = "Nagelkerke"),
+      error = function(e) NA_real_
+    )
+
+    co <- coef(m)
+
+    # 2.4.2. Rejilla de predicción con IC 95% en escala probabilidad
+    x_seq <- base::seq(
+      base::min(dat[[i]], na.rm = TRUE),
+      base::max(dat[[i]], na.rm = TRUE),
+      length.out = 200L
+    )
+    pred  <- stats::predict(
+      m,
+      newdata = stats::setNames(base::data.frame(x_seq), i),
+      type    = "link",
+      se.fit  = TRUE
+    )
+    z95   <- stats::qnorm(0.975)
+
+    base::list(
+      stats = tibble::tibble(
+        periodo    = periodo,
+        variable   = i,
+        b0         = co[[1]],
+        b1         = co[[2]],
+        nagelkerke = r2,
+        x_min      = base::min(dat[[i]], na.rm = TRUE),
+        x_max      = base::max(dat[[i]], na.rm = TRUE),
+        n_total    = base::nrow(dat),
+        n_pos      = base::sum(dat[[predicha]] == 1L),
+        n_neg      = base::sum(dat[[predicha]] == 0L)
+      ),
+      rejilla = tibble::tibble(
+        periodo  = periodo,
+        variable = i,
+        x        = x_seq,
+        p        = stats::plogis(pred$fit),
+        p_lo     = stats::plogis(pred$fit - z95 * pred$se.fit),
+        p_hi     = stats::plogis(pred$fit + z95 * pred$se.fit)
+      )
+    )
+  }) %>%
+    purrr::compact()  # elimina los NULL
+
+  base::list(
+    stats   = purrr::map_dfr(resultados, "stats"),
+    rejilla = purrr::map_dfr(resultados, "rejilla")
+  )
+}
+
+# 3. Descubrimiento automático de datasets
+rds_files <- fs::dir_ls(
+  path    = here::here("data/modelos/balanceo"),
+  regexp  = "df_b_.*\\.rds$",
+  recurse = TRUE
+)
+
+# 4. Aplicar sobre todos los datasets y consolidar
+resultados_logit <- purrr::map(rds_files, ajustar_logit)
+
+stats_logit   <- purrr::map_dfr(resultados_logit, "stats")
+rejilla_logit <- purrr::map_dfr(resultados_logit, "rejilla")
+
+message("Longitud resultados_logit: ", length(resultados_logit))
+message("Clase primer elemento: ", class(resultados_logit[[1]]))
+message("Nombres primer elemento: ", paste(names(resultados_logit[[1]]), collapse = ", "))
+
+stopifnot(nrow(stats_logit) > 0, nrow(rejilla_logit) > 0)
+
+# 5. Exportar a OJS
+ojs_define(stats_logit   = stats_logit)
+ojs_define(rejilla_logit = rejilla_logit)
+```
+
+```{ojs}
+//| label: indice-transpose-logit
+//| echo: false
+
+logit_rows = transpose(stats_logit)
+```
+
+```{ojs}
+//| label: selector-periodo-logit
+//| echo: false
+
+viewof periodo_logit = Inputs.select(
+  [...new Set(logit_rows.map(d => d.periodo))].sort(),
+  {label: "Periodo"}
+)
+```
+
+```{ojs}
+//| label: selector-variable-logit
+//| echo: false
+
+viewof variable_logit = Inputs.select(
+  logit_rows
+    .filter(d => d.periodo === periodo_logit)
+    .map(d => d.variable)
+    .filter((v, i, a) => a.indexOf(v) === i)
+    .sort(),
+  {label: "Variable"}
+)
+```
+
+```{ojs}
+//| label: renderizado-logit
+//| echo: false
+
+{
+  // ── Datos del modelo seleccionado ──────────────────────────────────────────
+  const st = logit_rows.find(
+    d => d.periodo === periodo_logit && d.variable === variable_logit
+  )
+  if (!st) return html`<p style="color:#888; font-style:italic">Sin datos para esta selección.</p>`
+
+  // ── Rejilla de predicción con IC 95% ────────────────────────────────────────
+  const rejilla_rows = transpose(rejilla_logit)
+  const curva = rejilla_rows.filter(
+    d => d.periodo === periodo_logit && d.variable === variable_logit
+  )
+  if (curva.length === 0) return html`<p>Sin rejilla de predicción para esta variable.</p>`
+
+  // ── Layout ──────────────────────────────────────────────────────────────────
+  const W  = 620, H = 400
+  const MG = { top: 55, right: 30, bottom: 55, left: 65 }
+  const iW = W - MG.left - MG.right
+  const iH = H - MG.top  - MG.bottom
+
+  const scX = d3.scaleLinear().domain([st.x_min, st.x_max]).range([0, iW])
+  const scY = d3.scaleLinear().domain([0, 1]).range([iH, 0])
+
+  const svg = d3.create("svg")
+    .attr("width", W).attr("height", H)
+    .style("font-family", "sans-serif")
+    .style("background", "white")
+
+  const g = svg.append("g")
+    .attr("transform", `translate(${MG.left},${MG.top})`)
+
+  // ── Cuadrícula ───────────────────────────────────────────────────────────────
+  g.append("g").attr("transform", `translate(0,${iH})`)
+    .call(d3.axisBottom(scX).ticks(6).tickSize(-iH))
+    .call(ax => ax.selectAll(".tick line").attr("stroke", "#eee"))
+    .call(ax => ax.select(".domain").attr("stroke", "#aaa"))
+
+  g.append("g")
+    .call(d3.axisLeft(scY).ticks(5).tickFormat(d3.format(".0%")).tickSize(-iW))
+    .call(ax => ax.selectAll(".tick line").attr("stroke", "#eee"))
+    .call(ax => ax.select(".domain").attr("stroke", "#aaa"))
+
+  // ── Banda IC 95% (calculada en R con predict + se.fit) ──────────────────────
+  g.append("path")
+    .datum(curva)
+    .attr("d", d3.area()
+      .x(d => scX(+d.x))
+      .y0(d => scY(+d.p_lo))
+      .y1(d => scY(+d.p_hi))
+      .curve(d3.curveBasis)
+    )
+    .attr("fill", "#2166AC")
+    .attr("opacity", 0.15)
+
+  // ── Curva logística ──────────────────────────────────────────────────────────
+  g.append("path")
+    .datum(curva)
+    .attr("d", d3.line()
+      .x(d => scX(+d.x))
+      .y(d => scY(+d.p))
+      .curve(d3.curveBasis)
+    )
+    .attr("stroke",       "#2166AC")
+    .attr("stroke-width", 2)
+    .attr("fill",         "none")
+
+  // ── Línea de probabilidad 0.5 ────────────────────────────────────────────────
+  g.append("line")
+    .attr("x1", 0).attr("x2", iW)
+    .attr("y1", scY(0.5)).attr("y2", scY(0.5))
+    .attr("stroke", "#aaa").attr("stroke-dasharray", "4,3").attr("stroke-width", 0.8)
+
+  // ── Anotación de estadísticos ────────────────────────────────────────────────
+  const sign   = v => v >= 0 ? "+" : "−"
+  const fmt3   = v => Math.abs(v).toPrecision(3)
+  const ecuTxt = `logit(p) = ${fmt3(st.b0)} ${sign(st.b1)} ${fmt3(Math.abs(st.b1))}·x   |   R² Nagelkerke = ${st.nagelkerke.toFixed(3)}   |   n = ${st.n_total}`
+
+  svg.append("text")
+    .attr("x", MG.left).attr("y", H - 8)
+    .attr("font-size", 9.5).attr("font-family", "monospace").attr("fill", "#444")
+    .text(ecuTxt)
+
+  // ── Título y etiquetas de ejes ────────────────────────────────────────────────
+  svg.append("text")
+    .attr("x", MG.left + iW / 2).attr("y", 18)
+    .attr("text-anchor", "middle")
+    .attr("font-size", 13).attr("font-weight", "bold")
+    .text(`Curva de respuesta: ${st.variable}`)
+
+  svg.append("text")
+    .attr("x", MG.left + iW / 2).attr("y", H - MG.bottom + 38)
+    .attr("text-anchor", "middle").attr("font-size", 11).attr("fill", "#444")
+    .text(st.variable)
+
+  svg.append("text")
+    .attr("transform", "rotate(-90)")
+    .attr("x", -(MG.top + iH / 2)).attr("y", 16)
+    .attr("text-anchor", "middle").attr("font-size", 11).attr("fill", "#444")
+    .text("Probabilidad de invasión")
+
+  svg.append("text")
+    .attr("x", MG.left + iW / 2).attr("y", 34)
+    .attr("text-anchor", "middle")
+    .attr("font-size", 10).attr("fill", "#666")
+    .text(`Pseudo-R² (Nagelkerke): ${st.nagelkerke.toFixed(3)}   ·   GLM logístico · IC 95%`)
+
+  return svg.node()
+}
+```
+
+### Variables independientes (análisis de la correlación)
+
+#### ¿Qué es la colinealidad?
+
+La *colinealidad* hace referencia a aquellas situaciones en las que dos variables predictoras de un modelo se encuentran relacionadas linealmente [@dormann2013]. La colinealidad perfecta se da cuando las variables predictoras son funciones lineales de otras. Esto genera una serie de problemas que comentaremos más adelante. Si esta relación se da entre más de dos variables predictoras, entonces se denomina como *multicolinealidad* [@kim2019].
+
+En ensayos *experimentales* es posible controlar los factores de modo que ninguno se vea afectado por otro (exogeneidad), o reducir dicha correlación significativamente. Sin embargo, este no suele ser el caso cuando nos enfrentamos a un set de datos *observacionales*, en el que lo normal es que se presente cierta endogeneidad entre las variables estudiadas. Generalmente, cualquier dataset sufrirá de un cierto grado de (multi)colinealidad, a no ser que las columnas de $X$ sean *ortogonales*.
+
+Existen 4 fuentes principales de multicolinealidad en nuestros datasets:
+
+1.  El método de muestreo empleado: Puede darse colinealidad cuando el muestreo tan solo toma datos de un subespacio de la región en la que se han definido los regresores.
+
+2.  Restricciones en el modelo o en la población objeto de estudio.
+
+3.  Especificaciones del modelo: La elección del modelo y su diseño pueden afectar a la colinealidad del dataset. Por ejemplo, añadir términos polinómicos a una variable con un rango muy reducido puede generar multicolinealidad severa en $X^T X$.
+
+4.  Sobredefinición del modelo: Cuanto menor sea la diferencia entre el número de regresores y el número de observaciones, mayor colinealidad se presentará.
+
+Matemáticamente, la presencia de colinealidad entre los predictores es un caso extremo de no ortogonalidad, y presenta severos inconvenientes en la *regresión por mínimos cuadrados*, especialmente si nuestro objetivo de modelización es la inferencia. Estos modelos poseen la forma:
+
+$$
+y = X\beta + \varepsilon
+$$
+
+donde $y$ es el vector $n \times 1$ de la *variable respuesta*, $X$ la matriz $n \times m$ de variables predictoras con $n$ observaciones (filas) y $m$ variables (columnas), $\beta$ es el vector $m \times 1$ que contiene las estimaciones de los parámetros y $\varepsilon$ el vector $n \times 1$ que representa el error aleatorio con distribución $\varepsilon_i \sim NID \left( 0, \sigma^2 \right)$.
+
+Esta ecuación general representa un sistema lineal de ecuaciones [@legendre2012]:
+
+$$
+\begin{aligned}
+y_1 &= b_0 + b_1 x_1 + \varepsilon_1 \\
+y_2 &= b_0 + b_1 x_2 + \varepsilon_2 \\
+    &\ \ \vdots \\
+y_n &= b_0 + b_1 x_n + \varepsilon_n
+\end{aligned}
+$$
+
+que matricialmente se representaría como:
+
+$$
+\mathbf{y} = \begin{bmatrix}
+y_1 \\
+y_2 \\
+\vdots \\
+y_n
+\end{bmatrix}, \quad
+\mathbf{X} = \begin{bmatrix}
+1 & x_1 \\
+1 & x_2 \\
+\vdots & \vdots \\
+1 & x_n
+\end{bmatrix}, \quad
+\mathbf{b} = \begin{bmatrix}
+b_0 \\
+b_1
+\end{bmatrix}, \quad
+\mathbf{\varepsilon} = \begin{bmatrix}
+\varepsilon_1 \\
+\varepsilon_2 \\
+\vdots \\
+\varepsilon_n
+\end{bmatrix}
+$$
+
+La matriz $X$ es ampliada con una columna de unos de modo que se pueda estimar el intercepto de la ecuación de regresión. Los coeficientes $b$ se estiman mediante mínimos cuadrados, lo que minimiza la suma de diferencias entre $y$ y sus estimaciones $\hat{y}$, es decir, la suma de caudrados de los residuos ($RSS$): 
+
+$$
+\varepsilon^T \varepsilon = \left( y - Xb \right)^T \left( y - Xb \right)
+$$
+
+Para obtener el mejor ajuste de los mínimos cuadrados, cada valor de la ecuación matricial se multiplica por la traspuesta de $X$: $X^T y = X^T X b$. Por tanto, derivando parcialmente, la matriz rectangular $X$ produce una matriz cuadrada $X^T X$, la cual puede ser invertida. Ahora podría estimarse directamente los coeficientes $b_0$ y $b_1$ tras invertir la matriz $X^T X$, pues en esencia, el método de mínimos cuadrados ordinarios ($OLS$) es equivalente a resolver un sistema de ecuaciones lineales:
+
+$$
+b = {\left( X^T X \right)}^{-1} X^T y
+$$
+
+De este mismo modo es fácil calcular los coeficientes $b_0,b_1,...,b_m$ en el caso (lineal) multivariable:
+
+$$
+\begin{aligned}
+y_1 &= b_0 + b_1 x_{11} + b_2 x_{12} + \cdots + b_m x_{1m} + \varepsilon_1 \\
+y_2 &= b_0 + b_1 x_{21} + b_2 x_{22} + \cdots + b_m x_{2m} + \varepsilon_2 \\
+    &\ \ \vdots \\
+y_n &= b_0 + b_1 x_{n1} + b_2 x_{n2} + \cdots + b_m x_{nm} + \varepsilon_n
+\end{aligned}
+$$
+
+que de forma matricial se expresaría como:
+
+$$
+\mathbf{y} = \begin{bmatrix}
+y_1 \\
+y_2 \\
+\vdots \\
+y_n
+\end{bmatrix}, \quad
+\mathbf{X} = \begin{bmatrix}
+1 & x_{11} & \cdots & x_{1m} \\
+1 & x_{21} & \cdots & x_{2m} \\
+\vdots & \vdots & & \vdots \\
+1 & x_{n1} & \cdots & x_{nm}
+\end{bmatrix}, \quad
+\mathbf{b} = \begin{bmatrix}
+b_0 \\
+b_1 \\
+\vdots \\
+b_m
+\end{bmatrix}, \quad
+\mathbf{\varepsilon} = \begin{bmatrix}
+\varepsilon_1 \\
+\varepsilon_2 \\
+\vdots \\
+\varepsilon_n
+\end{bmatrix}
+$$
+
+Bajo el supuesto de que exista multicolinealidad en las columnas de $X$, la matriz $X^T X$ es singular en el caso de que exista una multicolinealidad perfecta, y cercana a la singularidad cuando la multicolinealidad es casi perfecta, lo que hace que la estimación de los parámetros $\beta$ por mínimos cuadrados se vea sesgada, volviendo estas estimaciones innestables, de modo que pequeños cambios en los datos pueden producir cambios enormes en dichas estimaciones [@dobson2002]. Una comprobación sencilla sería la expuesta por los autores [@montgomery2012] en su libro. En el exponen un caso sencillo con dos variables predictoras, estando estas y la variable respuesta ya escaladas:
+
+$$
+y = \beta_1 x_1 + \beta_2 x_2 + \varepsilon
+$$
+
+y las ecuaciones por mínimos cuadrados serían:
+
+$$
+\begin{aligned}
+\left( X^T X \right) \hat{\beta} = X^T y \\
+\begin{bmatrix}
+1 & r_{12} \\
+r_{12} & 1
+\end{bmatrix}
+\begin{bmatrix}
+\hat{\beta_1} \\
+\hat{\beta_2}
+\end{bmatrix}
+= 
+\begin{bmatrix}
+r_{1y} \\
+r_{2y}
+\end{bmatrix}
+\end{aligned}
+$$
+
+donde $r_{12}$ es la correlación simple entre $x_1$ y $x_2$, y $r_{jy}$ es la correlación simple entre $x_j$ e $y$, $j=1,2$. Ahora la inversa de $\left( X^T X \right)$ es:
+
+$$
+C = {\left( X^T X \right)}^{-1} = 
+\begin{bmatrix}
+\frac{1}{1 - r_{12}^2} & \frac{-r_{12}}{1 - r_{12}^2} \\
+\frac{-r_{12}}{1 - r_{12}^2} & \frac{1}{1 - r_{12}^2}
+\end{bmatrix}
+$$
+
+y las estimaciones de los coeficientes de regresión son:
+
+$$
+\hat{\beta}_1 = \frac{r_{1y} - r_{12} r_{2y}}{1 - r_{12}^2}, \quad \hat{\beta}_2 = \frac{r_{2y} - r_{12} r_{1y}}{1 - r_{12}^2} 
+$$
+
+Si existe una fuerte multicolinearidad entre $x_1$ y $x_2$, el coeficiente de correlación $r_{12}$ será grande. Se puede ver que cuando $\left| r_{12} \right|$, por lo que $Var \left( \hat{\beta}_j \right) = C_{jj} \sigma^2 \rightarrow \infty$ y $Var \left( \hat{\beta}_1, \ \hat{\beta}_2 \right) = C_{12} \sigma^2 \rightarrow \pm \infty$ dependiendo del signo de $r_{12}$. Por lo tanto, una fuerte multicolinearidad entre $x_1$ y $x_2$ da como resultado una varianza y covarianza enormes en la estimación de los coeficientes de regresión por el método de mínimos cuadrados. Esto se traduce en enormes diferencias en los coeficientes de regresión obtenidos con datos ligeramente distintos a los empleados en la regresión.
+
+Cuando hay más de dos variables explicativas, la multicolinealidad produce resultados similares. Puede verse como los elementos diagonales de la matriz $C = {\left( X^T X \right)}^{-1}$ son:
+
+$$
+C_{jj} = \frac{1}{1 - R_j^2}, \quad j = 1,2,...,m
+$$
+
+donde $R_j^2$ es el *coeficeinte de determinación múltiple* resultado de la regresión de $x_j$ sobre el resto de variables regresoras $m - 1$. Si existe alta multicolinearidad entre $x_j$ y cualquier subset de variables explicativas $m - 1$, entonces el valor de $R_j^2$ será cercano a 1. Sabiendo que la varianza de $\hat{\beta}_j$ es $Var \left( \hat{\beta}_j \right) = C_{jj} \sigma^2 = {\left( 1 - R_j^2 \right)}^{-1} \sigma^2$, una multicolinealidad fuerte implicará que la varianza de los coeficientes de regresión $\beta_j$ estimados por mínimos cuadrados será grande. Así mismo, la covarianza de $\hat{\beta}_j$ y $\hat{\beta}_i$ también será grande cuando las variables $x_i$ y $x_j$ presenten colinealidad.
+
+La multicolinealidad también tiende a producir estimaciones por mínimos cuadrados de $\hat{\beta}_j$ con valores absolutos demasiado grandes. De nuevo el ejemplo que dan [@montgomery2012], es considerar la distancia al cuadrado entre el parámetro estimado $\hat{\beta}$ y el verdadero vector de parámetros $\beta$:
+
+$$
+L_1^2 = {\left( \hat{\beta} - \beta \right)}^T \left( \hat{\beta} - \beta \right)
+$$
+
+La esperanza de la distancia al cuadrado sería:
+
+$$
+E \left( L_1^2 \right) = E {\left( \hat{\beta} - \beta \right)}^T \left( \hat{\beta} - \beta \right) = \sum_{j=1}^m E {\left( \hat{\beta}_j - \beta_j \right)}^2 = \sum_{j=1}^m Var \left( \hat{\beta}_j \right) = \sigma^2 Tr {\left( X^T X \right)}^{-1}
+$$
+
+donde $Tr$ indica la *traza de la matriz*, que no es si no la suma de los elementos de su diagonal principal. Cuando hay multicolinealidad en el dataset, algunos de los eigenvalores de $X^T X$ serán pequeños. Dado que la traza de una matriz es igual a la suma de sus eigenvalores, la ecuación anterior queda como:
+
+$$
+E \left( L_1^2 \right) = \sigma^2 \sum_{j=1}^m \frac{1}{\lambda_j}
+$$
+
+donde $\lambda > 0, j=1,2,...,m$ son los eigenvalores de $X^T X$. Si $X^T X$ posee multicolinealidad severa, al menos uno de sus eigenvalores será pequeño, lo que indica que la distancia entre $\hat{\beta}$ y $\beta$ será grande:
+
+$$
+E \left( L_1^2 \right) = E {\left( \hat{\beta} - \beta \right)}^T \left( \hat{\beta} - \beta \right) = E \left( \hat{\beta}^T \hat{\beta} - 2 \hat{\beta}^T \beta + \beta^T \beta \right)
+$$
+
+o:
+
+$$
+E {\left( \hat{\beta}^T \hat{\beta} \right)} = \beta^T \beta + \sigma^2 Tr {\left( X^T X \right)}^{-1}
+$$
+
+El vector de coeficientes estimados $\hat{\beta}$ por lo general será más largo que el vector de coeficientes reales $\beta$. Esto implica que el método de mínimos cuadrados produce estimaciones demasiado grandes de los coeficientes de regresión del modelo.
+
+En la mayoría de flujos de trabajo en ecología, las técnicas estadísticas normalmente empleadas son sensibles a la presencia de colinealidad [@stewart1987; @belsley1991; @chatfield1995]. Incluso en el caso de las metodologías menos sensibles surgen dos problemas principales: el efecto de las variables no puede ser aislado y la extrapolación es errónea [@meloun2002].
+
+#### ¿Cómo se detecta la colinealidad?
+
+Existen diferentes metodologías para analizar la (multi)colinealidad de nuestro dataset. De forma general, dentro del análisis multivariante, se pueden distinguir 2 grandes grupos de técnicas para medir la colinealidad dentro de un dataset [@rivas2024], dependiendo de si las medidas empleadas para el diagnóstico arrojan un solo valor, o si generan tantas medidas como variables predictoras haya en el modelo [@muthukrishnan2024]:
+
+-   *Overall Collinearity Diagnostic Measures*: Son índices que miden el grado de colinealidad del dataset completo, pero no indican cuál o cuáles de los regresores (variables predictoras) son la causa de la multicolinealidad. Dentro de este grupo se encontrarían:
+
+    -   *Determinant*: El determinante de la matriz de correlación normalizada ($R = X^T X$) sin el intercepto puede ser empleado para indicar la eexistencia de colinealidad entre los predictores.
+
+    -   *Coeficiente de determinación múltiple* ($R_{y|X}^2 \in [0,1]$): $R_{y|X}^2$ mide la proporción de variación de la variable respuesta *y* sobre su media que explicada por el modelo lineal de todas las variables explicativas incluidas en la $X$. Este se calcula dividiendo la suma de cuadrados ($SS$) entre la suma total de cuadrados ($TSS$), o restando a 1 la división de la suma de cuadrados de los residuos entre el total de suma de cuadrados:
+
+    $$
+    R_{y|X}^2 = \frac{SS}{TSS} = \frac{\sum{\left( \hat{y}_i - \bar{y} \right)}^2}{\sum{\left( y_i - \bar{y} \right)}^2} = 1 - \frac{RSS}{TSS}
+    $$
+
+    $R_{y|X}^2$ es un estimador sesgado de la proporción de varianza de $y$ explicada por $X$, ya que s $X$ contienen $m = (n - 1)$ predictores aleatorios no relacionados con $y$, siendo $n$ el número de observaciones, $R_{y|X}^2 = 1$ a pesar de que las variables no poseen ninguna relación con $y$, ya que el valor esperado de $R_{y|X}^2$ con $m$ variableses predictoras no es 0 si no $m/(n - 1)$.
+
+    -   *Índice de condición* ($CN$; [@rawlings2001]): .
+
+-   *Individual Collinearity Diagnostic Measures*: Son índices que miden la colinealidad que presentan pares de variables del dataset. En este grupo se enmarcarían el *Variance Inflation Factor* ($VIF$) y el *Método de Leamer* ($C_j$).
+
+Debido a que ninguna de las medidas es superior a otra, y que además los resultados obtenidos no son comparables, es necesario practicar un análisis completo (preferiblemente empleando más de una) para poder entender correctamente la estructura de nuestros datos. Por lo general, las reglas de oro que se suelen emplear no son suficientes para determinar la existencia de multicolinealidad y, sobre todo, detectar cuando es relevante tenerla en cuenta en nuestro análisis [@janse2021]. La interpretación de los resultados obtenidos con estas técnicas debe estar siempre guiado por el contexto y el propósito de nuestro estudio [@kozak2009].
+
+#### ¿Cómo se combate?
+
+Además, al tratar de modelar un proceso ecológico, siempre hay que tener presente el principio de *parsimonia*, también conocido como la *navaja de Ockham*, formulado por el filosofo William Ockham. Dentro del campo de la modelización, este principio establece que los parámetros de un modelo deben ser seleccionados de una manera parsimoniosa, es decir, que aquellos parámetros que no contribuyan significactivamente al modelo deben ser eliminados [@legendre2012]. De hecho, cuañquier modelo que cotenga el mismo número de parámetros que de observaciones se ajustar perfectamente a los datos, eliminando los grados de libertad, y perdiendo cualquier capacidad de extrapolación a otro rango de datos que se encuentre fuera del actual.
+
+@hocking1976 propuso y comparó una serie de métodos para la selección de variables que presentaban colinearidad en una regresión lineal. En definitiva, el mejor subset de variables se escoge mediante la selección de aquellas variables que poseen una mayor contribución sobre el modelo. La selección puede hacerse de forma manual, comparando cada subset de variables hasta dar con el más indicado, o puede hacerse de manera heurística mediante alguna de las siguientes técnicas:
+
+-   *Backward elimination*: Al principio se seleccionan todas las variables, y en cada paso se elimina la variable que menos contribuye a la explicación de la variable respuesta (generalmente mediante correlación parcial), hasta que todas las variables explicativas que quedan poseen un coeficiente de regrasión parcial significativo. La contribución de cada variable pude medirse mediante el estadístico F para medir la significancia del coeficiente de regresión parcial (*F-to-remove*) o en términos de probabilidad (*p-to-remove*), en lugar de por correlación parcial o en términos del *AIC* o $AIC_c$.
+
+-   *Forward selection*: Se empieza sin variables explicativas en el modelo. La varaible introducida es aquella que produce el mayor incremento en $R^2$, siendo este incrementeo significativamente distinto de 0 bajo un cierto valor de significancia preestablecido. El procedimiento se repite iterativamente hasta que no se encuentran más variables explicativas que produzcan un incremento significativo de $R^2$. Los cálculos pueden ser simplificados al calcular la correlación parcial para todas las variables aún no incluidas, y comprobando después la significancia para las que poseen una mayor correlación parcial. El mayor inconveniente de este procedimiento es que las variables introducidas se mantienen en el modelo para las siguientes iteraciones, a pesar de que en presencia de otras variables añadidas posteriormente estas pueden poseer una contribución insignificante al $R^2$.
+
+-   *Stepwise procedure*: El problema que deja el procedimiento de *forward selection* puede ser remediado mediante este otro. Este alterna entre los métodos anteriores. Después de añadir una variable, se comprueba la significancia de todas las variables del modelo, y se eliminan aquellas que no sean significativas antes de incluir otras.
+
+Estos son procedimientos que sirven para eliminar de manera más o menos automática las variables que presentan colinealidad dentro de nuestro dataset, y los resultados obtenidos con cada uno pueden divergir.
+
+```{r}
+#| label: scatterplot
+#| eval: false
+
+# 1. Limpieza y paquetes
+rm(list = ls(all.names = TRUE))
+pacman::p_unload(pacman::p_loaded(), character.only = TRUE)
+base::gc(full = TRUE)
+
+pacman::p_load(dplyr, here, ggpubr, furrr, fs, stringr)
+
+# 2. Paralelismo
+future::plan(future::multisession, workers = 10L)
+
+# 3. Funciones auxiliares
+# 3.1. Detectar si una variable es categórica
+es_categorica <- function(x) {
+  is.factor(x) || is.character(x) || length(unique(na.omit(x))) <= 4L
+}
+
+# 3.2. Detectar si conviene escala logarítmica
+usar_log <- function(x) {
+  x <- x[is.finite(x)]
+  if (length(x) == 0 || any(x < 0)) return(FALSE)
+  x_pos <- x[x > 0]
+  if (length(x_pos) < 10L) return(FALSE)
+  # Criterio 1: rango amplio entre positivos
+  rango_amplio <- (max(x_pos) / min(x_pos)) > 50
+  # Criterio 2: distribución muy sesgada (percentil 95 >> mediana)
+  sesgo_alto   <- (quantile(x_pos, 0.95) / median(x_pos)) > 5
+  rango_amplio || sesgo_alto
+}
+
+# 3.3. Aplicar escala log a un ggplot ya construido
+aplicar_log <- function(p, log_x = FALSE, log_y = FALSE) {
+  if (log_x) p <- p + ggplot2::scale_x_log10()
+  if (log_y) p <- p + ggplot2::scale_y_log10()
+  p
+}
+
+# 3.4. Generar gráfico para un par de variables
+procesar_par <- function(par, input_df, predicha, dir_graficos) {
+  var_x <- par[1]
+  var_y <- par[2]
+
+  # 1. Reordenar par mixto: siempre (categórica, numérica)
+  if (es_categorica(input_df[[var_y]]) && !es_categorica(input_df[[var_x]])) {
+    var_x <- par[2]
+    var_y <- par[1]
+  }
+
+  # 2. Subconjunto, limpieza y construcción de clase
+  df_clases <- input_df[, c(predicha, var_x, var_y), drop = FALSE] |>
+    dplyr::filter(is.finite(.data[[predicha]])) |>
+    dplyr::mutate(clase = factor(
+      dplyr::if_else(.data[[predicha]] == 1L, "Presencia", "Ausencia"),
+      levels = c("Ausencia", "Presencia")
+    ))
+
+  if (nrow(df_clases) < 10L) return(NULL)
+
+  # 3. Añadir panel "Ambas" duplicando todas las filas con clase combinada
+  df_par <- dplyr::bind_rows(
+    df_clases,
+    dplyr::mutate(df_clases, clase = factor("Ambas"))
+  ) %>%
+    dplyr::mutate(clase = factor(clase, levels = c("Ausencia", "Presencia", "Ambas")))
+
+  paleta <- c("Ausencia" = "#2166AC", "Presencia" = "#8C2D04", "Ambas" = "#4D9D5A")
+
+  # 4. Gráfico según combinación de tipos
+  cat_x <- es_categorica(input_df[[var_x]])
+  cat_y <- es_categorica(input_df[[var_y]])
+
+  p <- if (!cat_x && !cat_y) {
+    # Ambas numéricas: scatterplot con regresión lineal, ecuación y r de Spearman
+    log_x <- usar_log(df_par[[var_x]])
+    log_y <- usar_log(df_par[[var_y]])
+    p <- ggpubr::ggscatter(
+      df_par,
+      x          = var_x,
+      y          = var_y,
+      color      = "clase",
+      palette    = paleta,
+      size       = 0.8,
+      alpha      = 0.25,
+      add        = "reg.line",
+      add.params = list(linewidth = 0.8),
+      conf.int   = TRUE,
+      facet.by   = "clase",
+      title      = paste(var_x, "\u2014", var_y),
+      xlab       = if (log_x) paste0(var_x, " (log\u2081\u2080)") else var_x,
+      ylab       = if (log_y) paste0(var_y, " (log\u2081\u2080)") else var_y
+    ) +
+      ggpubr::stat_regline_equation(
+        size        = 2.8,
+        label.x.npc = "left",
+        label.y.npc = 0.97
+      ) +
+      ggpubr::stat_regline_equation(
+        ggplot2::aes(label = after_stat(rr.label)),
+        size        = 2.8,
+        label.x.npc = "left",
+        label.y.npc = 0.91
+      ) +
+      ggpubr::stat_cor(
+        method        = "spearman",
+        cor.coef.name = "rho",
+        size          = 2.8,
+        label.x.npc   = "left",
+        label.y.npc   = 0.85
+      )
+    aplicar_log(p, log_x, log_y)
+  } else if (cat_x && !cat_y) {
+    # Categórica + numérica: violin + boxplot
+    log_y <- usar_log(df_par[[var_y]])
+    p <- ggpubr::ggviolin(
+      dplyr::mutate(df_par, across(all_of(var_x), factor)),
+      x          = var_x,
+      y          = var_y,
+      color      = "clase",
+      fill       = "clase",
+      palette    = paleta,
+      add        = c("boxplot", "mean_point"),
+      add.params = list(fill = "white", width = 0.15),
+      facet.by   = "clase",
+      title      = paste(var_x, "\u2014", var_y),
+      xlab       = var_x,
+      ylab       = if (log_y) paste0(var_y, " (log\u2081\u2080)") else var_y
+    )
+    aplicar_log(p, log_y = log_y)
+
+  } else {
+    # Ambas categóricas: balloon plot de frecuencias
+    df_balloon <- df_par %>%
+      dplyr::mutate(across(all_of(c(var_x, var_y)), factor)) %>%
+      dplyr::count(clase, .data[[var_x]], .data[[var_y]])
+
+    ggpubr::ggballoonplot(
+      df_balloon,
+      x        = var_x,
+      y        = var_y,
+      size     = "n",
+      fill     = "n",
+      facet.by = "clase",
+      ggtheme  = ggpubr::theme_pubr(),
+      title    = paste(var_x, "\u2014", var_y),
+      xlab     = var_x,
+      ylab     = var_y
+    )
+  }
+
+  # 5. Guardado
+  nombre_archivo <- paste0(var_x, "__", var_y, ".png")
+
+  ggplot2::ggsave(
+    file.path(dir_graficos, nombre_archivo), p, width = 12, height = 5, dpi = 600
+  )
+
+  ggplot2::ggsave(
+    file.path(dir_graficos, "preview", nombre_archivo), p, width = 10.5, height = 3.5, dpi = 150
+  )
+
+  invisible(NULL)
+}
+
+# 3.5. Función de iteración paralela sobre todos los pares
+scatterplot <- function(input_df, ruta_salida) {
+  # 1. Detectar variable respuesta y predictoras
+  predicha    <- names(input_df)[grep("^(diferencia|presencia)_", names(input_df))][1]
+  predictoras <- setdiff(names(input_df), predicha)
+
+  # 2. Convertir variable respuesta a 0/1
+  input_df[[predicha]] <- if (is.factor(input_df[[predicha]])) {
+    as.integer(input_df[[predicha]]) - 1L
+  } else {
+    as.integer(input_df[[predicha]])
+  }
+
+  # 3. Crear directorios de salida
+  purrr::walk(
+    file.path(ruta_salida, c("", "preview")),
+    dir.create,
+    recursive    = TRUE,
+    showWarnings = FALSE
+  )
+
+  # 4. Generar todos los pares sin repetición y procesar en paralelo
+  pares <- utils::combn(predictoras, 2, simplify = FALSE)
+
+  furrr::future_walk(
+    .x = pares,
+    .f = function(par) procesar_par(
+      par,
+      input_df,
+      predicha,
+      dir_graficos = ruta_salida
+    ),
+    .options = furrr::furrr_options(seed = TRUE)
+  )
+}
+
+# 4. Descubrimiento de datasets
+rds <- fs::dir_ls(
+  here::here("data/modelado/data_cleaning/balanceo"),
+  regexp  = "df_b_.*\\.rds$",
+  recurse = TRUE
+)
+
+# 5. Ejecución
+purrr::walk(rds, function(ruta_rds) {
+  scatterplot(
+    input_df    = readRDS(ruta_rds),
+    ruta_salida = here::here(
+      "data/modelado/eda/analisis_bivariante/scatterplot",
+      stringr::str_extract(basename(ruta_rds), "\\d{4}_\\d{4}")
+    )
+  )
+})
+
+# 6. Cerrar paralelismo
+future::plan(future::sequential)
+```
+
+```{r}
+#| label: scatter-datos
+#| warning: false
+
+# 1. Carga de paquetes y limpieza de entorno
+# 1.1. Limpiamos la RAM
+rm(list = ls(all.names = TRUE))
+pacman::p_unload(pacman::p_loaded(), character.only = TRUE)
+base::gc(full = TRUE)
+
+# 1.2. Cargamos las librerías a emplear
+pacman::p_load(dplyr, purrr, tidyr, here, fs, stringr, tibble)
+
+# 2. Función de preparación por periodo
+preparar_periodo <- function(ruta) {
+
+  # 2.1. Identificar periodo y leer dataset
+  periodo <- stringr::str_extract(base::basename(ruta), "\\d{4}_\\d{4}")
+  df      <- base::readRDS(ruta)
+
+  # 2.2. Identificar variable respuesta y predictoras numéricas
+  predicha  <- base::names(df)[base::grep("^(diferencia|presencias)_", base::names(df))][1]
+  numericas <- df %>%
+    dplyr::select(-dplyr::all_of(predicha)) %>%
+    dplyr::select(where(is.numeric)) %>%
+    base::names()
+
+  # 2.3. Construir data frame de trabajo: solo numéricas + clase codificada 0/1
+  df_num <- df %>%
+    dplyr::select(dplyr::all_of(c(predicha, numericas))) %>%
+    dplyr::mutate(
+      clase = if (is.factor(.data[[predicha]])) {
+        base::as.integer(.data[[predicha]]) - 1L
+      } else {
+        base::as.integer(.data[[predicha]])
+      }
+    ) %>%
+    dplyr::select(-dplyr::all_of(predicha))
+
+
+  # 3. Matriz de correlación de Spearman (formato largo, todos los pares)
+  mat_cor <- stats::cor(
+    df_num %>% dplyr::select(-clase),
+    method = "spearman",
+    use    = "pairwise.complete.obs"
+  )
+
+  vars     <- base::colnames(mat_cor)
+  cor_long <- purrr::map_dfr(
+    base::seq_along(vars),
+    function(i) {
+      purrr::map_dfr(base::seq_along(vars), function(j) {
+        tibble::tibble(
+          var_x = vars[i],
+          var_y = vars[j],
+          rho   = mat_cor[i, j]
+        )
+      })
+    }
+  ) %>%
+    dplyr::mutate(periodo = periodo)
+
+
+  # 4. Stats de regresión lineal por par (triángulo superior únicamente)
+  pares_idx  <- base::which(base::upper.tri(mat_cor), arr.ind = TRUE)
+
+  stats_pares <- purrr::map_dfr(
+    base::seq_len(base::nrow(pares_idx)),
+    function(k) {
+      vx  <- vars[pares_idx[k, 1]]
+      vy  <- vars[pares_idx[k, 2]]
+      dat <- df_num %>%
+        dplyr::select(clase, x = dplyr::all_of(vx), y = dplyr::all_of(vy)) %>%
+        dplyr::filter(is.finite(x), is.finite(y))
+
+      if (base::nrow(dat) < 10L) return(NULL)
+
+      purrr::map_dfr(
+        base::unique(dat$clase),
+        function(cl) {
+          d   <- dplyr::filter(dat, clase == cl)
+          mod <- stats::lm(y ~ x, data = d)
+          co  <- stats::coef(mod)
+          tibble::tibble(
+            var_x = vx,
+            var_y = vy,
+            clase = cl,
+            b0    = co[1],
+            b1    = co[2],
+            r2    = summary(mod)$r.squared
+          )
+        }
+      )
+    }
+  ) %>%
+    dplyr::mutate(periodo = periodo)
+
+
+  # 5. Datos brutos para renderizado en cliente (todas las filas, solo numéricas)
+  datos_brutos <- df_num %>%
+    dplyr::mutate(periodo = periodo)
+
+
+  # 6. Devolver lista con todos los objetos del periodo
+  base::list(
+    periodo      = periodo,
+    variables    = vars,
+    cor_long     = cor_long,
+    stats_pares  = stats_pares,
+    datos_brutos = datos_brutos
+  )
+}
+
+
+# 7. Descubrimiento automático de datasets
+rds_files <- fs::dir_ls(
+  path    = here::here("data/modelos/balanceo"),
+  regexp  = "df_b_.*\\.rds$",
+  recurse = TRUE
+)
+
+# 8. Aplicar función sobre todos los datasets
+resultados <- purrr::map(rds_files, preparar_periodo)
+
+
+# 9. Consolidar y exportar a OJS
+cor_todos   <- purrr::map_dfr(resultados, "cor_long")
+stats_todos <- purrr::map_dfr(resultados, "stats_pares")
+datos_todos <- purrr::map_dfr(resultados, "datos_brutos")
+
+ojs_define(cor_data     = cor_todos)
+ojs_define(stats_data   = stats_todos)
+ojs_define(datos_brutos = datos_todos)
+```
+
+```{ojs}
+//| label: scatter-heatmap-setup
+//| echo: false
+
+cor_rows    = transpose(cor_data)
+stats_rows  = transpose(stats_data)
+datos_rows  = transpose(datos_brutos)
+```
+
+```{ojs}
+//| label: scatter-selector-periodo
+//| echo: false
+
+periodos_disponibles = [...new Set(cor_rows.map(d => d.periodo))].sort()
+
+viewof periodo_hm = Inputs.select(periodos_disponibles, {label: "Periodo"})
+```
+
+```{ojs}
+//| label: scatter-heatmap
+//| echo: false
+
+{
+  const W      = 820
+  const LEG_H  = 50   // espacio reservado bajo la matriz para la leyenda
+  const MARGIN = { top: 120, right: 20, bottom: LEG_H + 10, left: 120 }
+
+  const filas_periodo = cor_rows.filter(d => d.periodo === periodo_hm)
+  const vars          = [...new Set(filas_periodo.map(d => d.var_x))].sort()
+  const n             = vars.length
+  const celda         = Math.floor((W - MARGIN.left - MARGIN.right) / n)
+  const matH          = celda * n
+  const H             = matH + MARGIN.top + MARGIN.bottom
+
+  const x = d3.scaleBand().domain(vars).range([0, matH]).padding(0.02)
+  const y = d3.scaleBand().domain(vars).range([0, matH]).padding(0.02)
+
+  const colorScale = d3.scaleDiverging()
+    .domain([-1, 0, 1])
+    .interpolator(d3.interpolateRdBu)
+
+  const svg = d3.create("svg")
+    .attr("width",  W)
+    .attr("height", H)
+    .style("font-family", "sans-serif")
+
+  const g = svg.append("g")
+    .attr("transform", `translate(${MARGIN.left},${MARGIN.top})`)
+
+  // ── Celdas ──────────────────────────────────────────────────────────────────
+  g.selectAll("rect")
+    .data(filas_periodo)
+    .join("rect")
+      .attr("x",      d => x(d.var_x))
+      .attr("y",      d => y(d.var_y))
+      .attr("width",  x.bandwidth())
+      .attr("height", y.bandwidth())
+      .attr("fill",   d => colorScale(d.rho))
+      .attr("rx", 1)
+      .style("cursor", d => d.var_x !== d.var_y ? "pointer" : "default")
+      .on("mouseenter", function(event, d) {
+        if (d.var_x === d.var_y) return
+        d3.select(this).attr("stroke", "#333").attr("stroke-width", 1.5)
+        tooltip.style("display", "block")
+          .html(`<b>${d.var_x}</b> × <b>${d.var_y}</b><br>ρ = ${d.rho.toFixed(3)}`)
+          .style("left", (event.offsetX + 12) + "px")
+          .style("top",  (event.offsetY - 28) + "px")
+      })
+      .on("mouseleave", function(event, d) {
+        d3.select(this).attr("stroke", "none")
+        tooltip.style("display", "none")
+      })
+      .on("click", function(event, d) {
+        if (d.var_x === d.var_y) return
+        const [vx, vy] = vars.indexOf(d.var_x) < vars.indexOf(d.var_y)
+          ? [d.var_x, d.var_y]
+          : [d.var_y, d.var_x]
+        mutable par_seleccionado = { vx, vy, periodo: d.periodo }
+      })
+
+  // ── Etiquetas eje X ─────────────────────────────────────────────────────────
+  g.append("g")
+    .selectAll("text")
+    .data(vars)
+    .join("text")
+      .attr("x",           d => x(d) + x.bandwidth() / 2)
+      .attr("y",           -6)
+      .attr("text-anchor", "start")
+      .attr("font-size",   Math.min(10, celda * 0.7))
+      .attr("transform",   d => `rotate(-45, ${x(d) + x.bandwidth() / 2}, -6)`)
+      .text(d => d)
+
+  // ── Etiquetas eje Y ─────────────────────────────────────────────────────────
+  g.append("g")
+    .selectAll("text")
+    .data(vars)
+    .join("text")
+      .attr("x",           -6)
+      .attr("y",           d => y(d) + y.bandwidth() / 2)
+      .attr("text-anchor", "end")
+      .attr("dominant-baseline", "middle")
+      .attr("font-size",   Math.min(10, celda * 0.7))
+      .text(d => d)
+
+  // ── Leyenda de color (fuera de la matriz, bajo MARGIN.bottom) ────────────────
+  const defs       = svg.append("defs")
+  const gradId     = "grad-spearman"
+  const linearGrad = defs.append("linearGradient").attr("id", gradId)
+  ;[-1, -0.5, 0, 0.5, 1].forEach(v => {
+    linearGrad.append("stop")
+      .attr("offset",     `${((v + 1) / 2) * 100}%`)
+      .attr("stop-color", colorScale(v))
+  })
+
+  const legW = 200, legH = 10
+  const legX = MARGIN.left
+  const legY = MARGIN.top + matH + 20   // siempre 20px bajo la última fila
+
+  svg.append("text")
+    .attr("x", legX).attr("y", legY - 4)
+    .attr("font-size", 10).attr("fill", "#555")
+    .text("Correlación de Spearman (ρ)")
+
+  svg.append("rect")
+    .attr("x", legX).attr("y", legY)
+    .attr("width", legW).attr("height", legH)
+    .style("fill", `url(#${gradId})`)
+
+  ;[-1, 0, 1].forEach(v => {
+    svg.append("text")
+      .attr("x", legX + ((v + 1) / 2) * legW)
+      .attr("y", legY + legH + 12)
+      .attr("text-anchor", "middle")
+      .attr("font-size", 9)
+      .text(v)
+  })
+
+  // ── Tooltip ─────────────────────────────────────────────────────────────────
+  const contenedor = html`<div style="position:relative; display:inline-block">`
+  const tooltip    = d3.select(contenedor)
+    .append("div")
+    .style("position",       "absolute")
+    .style("display",        "none")
+    .style("background",     "white")
+    .style("border",         "1px solid #ccc")
+    .style("border-radius",  "4px")
+    .style("padding",        "5px 8px")
+    .style("font-size",      "12px")
+    .style("pointer-events", "none")
+    .style("box-shadow",     "0 2px 6px rgba(0,0,0,.15)")
+
+  contenedor.appendChild(svg.node())
+  return contenedor
+}
+```
+
+```{ojs}
+//| label: scatter-detail
+//| echo: false
+
+mutable par_seleccionado = null
+```
+
+```{ojs}
+//| label: scatter-plot-detalle
+//| echo: false
+
+{
+  if (!par_seleccionado) return html`<p style="color:#888; font-style:italic">
+    Haz click en una celda del heatmap para ver el scatterplot.</p>`
+
+  const { vx, vy, periodo } = par_seleccionado
+
+  const pts = datos_rows
+    .filter(d => d.periodo === periodo && isFinite(d[vx]) && isFinite(d[vy]))
+    .map(d => ({ x: +d[vx], y: +d[vy], clase: String(d.clase) }))
+
+  if (pts.length < 5) return html`<p>Sin datos suficientes para este par.</p>`
+
+  const clases   = [...new Set(pts.map(d => d.clase))].sort()
+  const colClase = d3.scaleOrdinal()
+    .domain(clases)
+    .range(["#3b528b", "#fde725"])
+
+  // ── Stats de regresión ───────────────────────────────────────────────────────
+  // Buscar en ambas orientaciones del par (el triángulo superior solo guarda una)
+  const stats_par = stats_rows.filter(
+    d => d.periodo === periodo &&
+         ((d.var_x === vx && d.var_y === vy) ||
+          (d.var_x === vy && d.var_y === vx))
+  )
+
+  // ── Layout ───────────────────────────────────────────────────────────────────
+  const W  = 620, H  = 480
+  const MG = { top: 50, right: 140, bottom: 70, left: 65 }
+  const DM = 80
+
+  const xExt = d3.extent(pts, d => d.x)
+  const yExt = d3.extent(pts, d => d.y)
+  const xPad = (xExt[1] - xExt[0]) * 0.05 || 1
+  const yPad = (yExt[1] - yExt[0]) * 0.05 || 1
+
+  const xDom = [xExt[0] - xPad, xExt[1] + xPad]
+  const yDom = [yExt[0] - yPad, yExt[1] + yPad]
+
+  const innerW = W - MG.left - MG.right
+  const innerH = H - MG.top  - MG.bottom - DM
+
+  const scX = d3.scaleLinear().domain(xDom).range([0, innerW])
+  const scY = d3.scaleLinear().domain(yDom).range([innerH, 0])
+
+  const svg = d3.create("svg").attr("width", W).attr("height", H)
+    .style("font-family", "sans-serif").style("background", "white")
+
+  // ── Clip path para recortar rectas al área del gráfico ───────────────────────
+  svg.append("defs").append("clipPath").attr("id", "plot-area")
+    .append("rect")
+      .attr("x", 0).attr("y", 0)
+      .attr("width", innerW).attr("height", innerH)
+
+  const gMain = svg.append("g")
+    .attr("transform", `translate(${MG.left},${MG.top + DM})`)
+
+  // ── Ejes ─────────────────────────────────────────────────────────────────────
+  gMain.append("g").attr("transform", `translate(0,${innerH})`)
+    .call(d3.axisBottom(scX).ticks(6).tickSize(-innerH))
+    .call(ax => ax.selectAll(".tick line").attr("stroke", "#eee"))
+    .call(ax => ax.select(".domain").attr("stroke", "#aaa"))
+
+  gMain.append("g")
+    .call(d3.axisLeft(scY).ticks(6).tickSize(-innerW))
+    .call(ax => ax.selectAll(".tick line").attr("stroke", "#eee"))
+    .call(ax => ax.select(".domain").attr("stroke", "#aaa"))
+
+  // ── Puntos ───────────────────────────────────────────────────────────────────
+  gMain.append("g").attr("clip-path", "url(#plot-area)")
+    .selectAll("circle")
+    .data(pts)
+    .join("circle")
+      .attr("cx",      d => scX(d.x))
+      .attr("cy",      d => scY(d.y))
+      .attr("r",       3)
+      .attr("fill",    d => colClase(d.clase))
+      .attr("opacity", 0.35)
+
+  // ── Rectas de regresión recortadas al área del gráfico ───────────────────────
+  const gRectas = gMain.append("g").attr("clip-path", "url(#plot-area)")
+
+  clases.forEach(cl => {
+    // Buscar stats para esta clase; si el par está invertido, invertir b1
+    let st = stats_par.find(d => String(d.clase) === cl)
+    if (!st) return
+
+    // Si el par está almacenado con var_x=vy, var_y=vx la pendiente es la inversa
+    const invertido = (st.var_x === vy && st.var_y === vx)
+    const b0_plot   = invertido ? -st.b0 / st.b1 : st.b0
+    const b1_plot   = invertido ? 1 / st.b1       : st.b1
+
+    // Evaluar la recta en los extremos del dominio X visible
+    const lineData = xDom.map(xv => [xv, b0_plot + b1_plot * xv])
+
+    gRectas.append("path")
+      .datum(lineData)
+      .attr("d", d3.line().x(d => scX(d[0])).y(d => scY(d[1])))
+      .attr("stroke",       colClase(cl))
+      .attr("stroke-width", 1.8)
+      .attr("fill",         "none")
+      .attr("opacity",      0.85)
+  })
+
+  // ── Densidades marginales (eje X, arriba) ────────────────────────────────────
+  const gDensX    = svg.append("g").attr("transform", `translate(${MG.left},${MG.top})`)
+  const scDX      = d3.scaleLinear().domain(xDom).range([0, innerW])
+  const scDY_dx   = d3.scaleLinear().range([DM - 4, 0])
+
+  clases.forEach(cl => {
+    const vals = pts.filter(d => d.clase === cl).map(d => d.x)
+    if (vals.length < 4) return
+    const bw   = 0.7 * d3.deviation(vals)
+    const kde  = kernelDensityEstimator(kernelEpanechnikov(bw), scDX.ticks(40))
+    const dens = kde(vals)
+    scDY_dx.domain([0, d3.max(dens, d => d[1]) * 1.2])
+
+    gDensX.append("path").datum(dens)
+      .attr("d", d3.area().x(d => scDX(d[0])).y0(DM - 4).y1(d => scDY_dx(d[1])).curve(d3.curveBasis))
+      .attr("fill", colClase(cl)).attr("opacity", 0.30)
+    gDensX.append("path").datum(dens)
+      .attr("d", d3.line().x(d => scDX(d[0])).y(d => scDY_dx(d[1])).curve(d3.curveBasis))
+      .attr("stroke", colClase(cl)).attr("stroke-width", 1.2)
+      .attr("fill", "none").attr("opacity", 0.75)
+  })
+
+  // ── Densidades marginales (eje Y, derecha) ───────────────────────────────────
+  const gDensY  = svg.append("g").attr("transform", `translate(${MG.left + innerW},${MG.top + DM})`)
+  const scDY_dy = d3.scaleLinear().domain(yDom).range([innerH, 0])
+  const scDX_dy = d3.scaleLinear().range([0, MG.right - 20])
+
+  clases.forEach(cl => {
+    const vals = pts.filter(d => d.clase === cl).map(d => d.y)
+    if (vals.length < 4) return
+    const bw   = 0.7 * d3.deviation(vals)
+    const kde  = kernelDensityEstimator(kernelEpanechnikov(bw), scDY_dy.ticks(40))
+    const dens = kde(vals)
+    scDX_dy.domain([0, d3.max(dens, d => d[1]) * 1.2])
+
+    gDensY.append("path").datum(dens)
+      .attr("d", d3.area().y(d => scDY_dy(d[0])).x0(0).x1(d => scDX_dy(d[1])).curve(d3.curveBasis))
+      .attr("fill", colClase(cl)).attr("opacity", 0.30)
+    gDensY.append("path").datum(dens)
+      .attr("d", d3.line().y(d => scDY_dy(d[0])).x(d => scDX_dy(d[1])).curve(d3.curveBasis))
+      .attr("stroke", colClase(cl)).attr("stroke-width", 1.2)
+      .attr("fill", "none").attr("opacity", 0.75)
+  })
+
+  // ── Anotación de ecuaciones ──────────────────────────────────────────────────
+  const sign  = v => v >= 0 ? "+" : "−"
+  const fmt3  = v => Math.abs(v).toPrecision(3)
+  const fmtR2 = v => v.toFixed(3)
+
+  const ecuLines = stats_par.map(s => {
+    const inv = (s.var_x === vy && s.var_y === vx)
+    const b0  = inv ? -s.b0 / s.b1 : s.b0
+    const b1  = inv ? 1 / s.b1     : s.b1
+    return `clase ${s.clase}:  y = ${fmt3(b0)} ${sign(b1)} ${fmt3(Math.abs(b1))}·x   (R² = ${fmtR2(s.r2)})`
+  })
+
+  const gEcu   = svg.append("g").attr("transform", `translate(${MG.left + 6}, ${MG.top + DM + 14})`)
+  const ecuBox = gEcu.append("rect").attr("fill", "white").attr("stroke", "#ccc")
+    .attr("stroke-width", 0.6).attr("rx", 3).attr("y", -12)
+
+  ecuLines.forEach((line, i) => {
+    gEcu.append("text").attr("y", i * 14)
+      .attr("font-size", 10).attr("font-family", "monospace").attr("fill", "#333")
+      .text(line)
+  })
+
+  const bb = gEcu.node().getBBox()
+  ecuBox.attr("x", bb.x - 4).attr("width", bb.width + 8).attr("height", bb.height + 6)
+
+  // ── Título y etiquetas de ejes ───────────────────────────────────────────────
+  svg.append("text")
+    .attr("x", MG.left + innerW / 2).attr("y", 16)
+    .attr("text-anchor", "middle").attr("font-size", 13).attr("font-weight", "bold")
+    .text(`${vx}  —  ${vy}`)
+
+  svg.append("text")
+    .attr("x", MG.left + innerW / 2).attr("y", H - 8)
+    .attr("text-anchor", "middle").attr("font-size", 11).attr("fill", "#444")
+    .text(vx)
+
+  svg.append("text")
+    .attr("transform", "rotate(-90)")
+    .attr("x", -(MG.top + DM + innerH / 2)).attr("y", 14)
+    .attr("text-anchor", "middle").attr("font-size", 11).attr("fill", "#444")
+    .text(vy)
+
+  // ── Leyenda de clase ─────────────────────────────────────────────────────────
+  clases.forEach((cl, i) => {
+    const lx = MG.left + innerW + 8
+    const ly = MG.top + DM + 20 + i * 18
+    svg.append("circle").attr("cx", lx + 6).attr("cy", ly).attr("r", 5).attr("fill", colClase(cl))
+    svg.append("text").attr("x", lx + 15).attr("y", ly + 4)
+      .attr("font-size", 10).attr("fill", "#333").text(`clase ${cl}`)
+  })
+
+  return svg.node()
+}
+```
+
+```{ojs}
+//| label: scatter-kde-helpers
+//| echo: false
+
+function kernelDensityEstimator(kernel, X) {
+  return function(V) {
+    return X.map(x => [x, d3.mean(V, v => kernel(x - v))])
+  }
+}
+
+function kernelEpanechnikov(k) {
+  return function(v) {
+    v = v / k
+    return Math.abs(v) <= 1 ? 0.75 * (1 - v * v) / k : 0
+  }
+}
+```
+
+## Reducción de la dimensionalidad
+
+Los datasets que presentan una elevada dimensionalidad (como es nuestro caso), por lo general, suelen provocar dificultades a la de entrenar modelos de machine learning. Esto se debe en gran medida a que entrenar modelos con un gran número de variables suele conducir a un mayor gasto computacional y de tiempo. Además esto dificulta la interpretación de los resultados obtenidos.
+
+En estos casos se suele recurrir a un conjunto de técnicas denominadas como *Reducción de la Dimensionalidad* (DR). Estas tratan de reducir el número de variables del dataset mediante la búsqueda de una serie de componenetes del hipervolumen de variables, que capturen el mayor porcentaje posible de la varianza presente en los datos, reduciendo la colinealidad entre las columnas del dataset y mejorando la comprensión visual de los datos.
+
+Las técnicas de DR pueden clasificarse en dos grupos principalmente [@vachharajani2022]. El primer grupo, denominao *Selección de Variables* (Feature Selection), estaría constituido por aquellas técnicas que eliminan variables redundantes mediante la aplicación de técnicas sencillas, sin llegar a aplicar ninguna transformación sobre los datos. El segundo grupo, denominado *Extracción de Variables* (Feature Extraction), engloba aquellas técnicas que transforman el espacio original de datos de alta dimensionalidad en un conjunto de variables que resultan la combinación de las variables originales.
+
+Este último grupo se subdivide a su vez en otros dos grupos: *lineales* y *no lineales* [@fodor2002]. Las técnicas lineales proyectan linealmente el espacio original de datos en un nuevo espacio de menor dimensionalidad. Dentro de este grupo se encontrarían técnicas como *Factor Analysis* (FA), *Principal Component Analysis* (PCA), *Singular Value Decomposition* (SVD) y *Linear Discriminant Analysis* (LDA). Las técnicas no lineales son más convenientes cuando la relación entre los datos no es lineal. En este grupo se encontrarían *Kernel PCA*, *t-distributed Stochastic Neighbour Embedding* (t-SNE) y *Multidimensional Scaling* (MDS).
+
+Aunque por lo general las técnicas DR suelen emplearse para reducir la dimensionalidad del dataset, en numerosas ocasiones estas también pueden ser empleadas para la exploración preliminar y visual del espacio de datos [@carreira-perpinan1997]. Este será el uso que le daremos en esta ocasión. A pesar de contar con variables categóricas dentro del dataset, emplearemos el data frame escalado, en el que ya han sido eliminadas las variables categóricas (incluyendo la variable respuesta).
+
+### Reducción lineal de la dimensionalidad
+
+La técnica de DR más ampliamente empleada en el *análisis multivariante* es el *Análisis de Componentes Principales* (PCA), la cual fue introducida a comienzos del s. XIX por Pearson [@pearson1901], y redescubierta independientemente por Hotelling [@hotelling1933].
+
+El PCA es la mejor técnica de reducción lineal de la dimensionalidad, en cuanto a rendimiento del *error cuadrático medio* [@jackson1991; @jolliffe2002]. Esta técnica se basa en la matriz de correlación/covarianza de las variables, y en esencia trata de reducir la dimensionalidad encontrando algunas combinaciones lineales y ortogonales de las variables originales que maximizan la varianza del dataset [@fodor2002].
+
+Para practicar un PCA sobre nuestros datasets podemos emplear la librería `FactoMineR` [@husson2026] para aplicar el PCA, y la librería `factoextra` [@kassambara2026] para obtener una visualización superior de los resultados.
+
+```{r}
+#| label: pca
+#| eval: false
+
+# 1. Carga de paquetes y limpieza de entorno
+# 1.1. Limpiamos la RAM
+future::plan(future::sequential)
+rm(list = ls(all.names = TRUE))
+pacman::p_unload(pacman::p_loaded(), character.only = TRUE)
+gc(full = TRUE)
+
+# 1.2. Cargamos las librerías a emplear
+pacman::p_load(FactoMineR, factoextra, dplyr, tidyr, purrr, furrr, future, here)
+
+# 1.3. Configurar paralelismo
+future::plan(multisession, workers = 2L)
+
+
+# 2. Función de balanceo
+pca <- function(ruta_input, ruta_output, etiqueta) {
+  # 1. Lectura del dataframe
+  df <- base::readRDS(ruta_input)
+
+  # 2. PCA
+  pca <- FactoMineR::PCA(df, scale.unit = FALSE, graph = FALSE)
+
+  # 3. Gráfico de varianza explicada por cada componente
+  var <- factoextra::fviz_screeplot(pca, addlabels = TRUE, ylim = c(0, 50))
+
+  # 4. Gráfico de contribución de las variables
+  con1 <- factoextra::fviz_contrib(pca, choice = "var", axes = 1, top = 10)
+
+  con2 <- factoextra::fviz_contrib(pca, choice = "var", axes = 2, top = 10)
+
+  # 5. Gráfico de las 2 primeras componentes
+  comp <- factoextra::fviz_pca_var(pca, col.var ="contrib", gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"), repel = TRUE)
+
+  # 6. Guardado
+  base::saveRDS(object = pca, file = file.path(ruta_output, paste0("pca_", etiqueta, ".rds")))
+
+  ggplot2::ggsave(filename = file.path(ruta_output, paste0("var_", etiqueta, ".png")), plot = var, width = 8, height = 5, dpi = 600)
+
+  ggplot2::ggsave(filename = file.path(ruta_output, paste0("con1_", etiqueta, ".png")), plot = con1, width = 8, height = 5, dpi = 600)
+
+  ggplot2::ggsave(filename = file.path(ruta_output, paste0("con2_", etiqueta, ".png")), plot = con2, width = 8, height = 5, dpi = 600)
+
+  ggplot2::ggsave(filename = file.path(ruta_output, paste0("comp_", etiqueta, ".png")), plot = comp, width = 8, height = 5, dpi = 600)
+  
+  # 7. Limpieza
+  rm(df, pca, con1, con2, comp)
+  gc(full = TRUE)
+}
+
+# 3. Definir datasets
+datasets <- list(
+  list(
+    ruta_input  = here::here("data/modelos/escalado/df_be_2008_2023.rds"),
+    ruta_output = "data/modelos/eda/pca",
+    etiqueta = "2008_2023"
+  ),
+  list(
+    ruta_input  = here::here("data/modelos/escalado/df_be_2015_2023.rds"),
+    ruta_output = "data/modelos/eda/pca",
+    etiqueta = "2015_2023"
+  )
+)
+
+# 4. Ejecutar en paralelo
+furrr::future_walk(
+  datasets,
+  ~pca(
+    ruta_input = .x$ruta_input,
+    ruta_output = .x$ruta_output,
+    etiqueta = .x$etiqueta
+  ),
+  .options = furrr::furrr_options(seed = TRUE)
+)
+
+# 5. Detener paralelización
+future::plan(sequential)
+```
+
+### Reducción no lineal de la dimensionalidad
+
+## Análisis de clusters

@@ -1,0 +1,58 @@
+# 1. Configuración de rutas (Ruta absoluta necesaria)
+# Reemplaza 'Usuario' por tu nombre de usuario real en Windows
+$wbt = "C:\Users\Usuario\AppData\Roaming\R\data\R\whitebox\WBT\whitebox_tools.exe"
+$baseDir = "D:/TFM/data/variables/variables_relieve"
+
+# Verificación de existencia del ejecutable
+if (!(Test-Path $wbt)) { 
+    Write-Error "No se encontró whitebox_tools.exe en la ruta especificada."
+    exit 
+}
+
+# 2. Cálculo del MDE "fisurado" (Breach Depressions)
+Write-Host "Iniciando Breach Depressions..." -ForegroundColor Cyan
+& $wbt --run=BreachDepressionsLeastCost `
+    --dem="$baseDir/mde/mde.tif" `
+    --output="$baseDir/mde/mde_breached.tif" `
+    --dist=30 `
+    --fill 
+
+# 3. Cálculo del MDE "rellenado" (Wang and Liu, 2006)
+Write-Host "Iniciando Fill Depressions..." -ForegroundColor Cyan
+& $wbt --run=FillDepressionsWangAndLiu `
+    --dem="$baseDir/mde/mde_breached.tif" `
+    --output="$baseDir/mde/mde_filled.tif" 
+
+# 4. Cálculo de la pendiente (en grados)
+Write-Host "Calculando Pendiente..." -ForegroundColor Cyan
+& $wbt --run=Slope `
+    --dem="$baseDir/mde/mde_filled.tif" `
+    --output="$baseDir/slope/slope_grados.tif" `
+    --units=degrees 
+
+# 5. Cálculo del Área de Contribución Específica (SCA) usando D-Infinity
+Write-Host "Calculando SCA (D-Infinity)..." -ForegroundColor Cyan
+& $wbt --run=DInfFlowAccumulation `
+    --input="$baseDir/mde/mde_filled.tif" `
+    --output="$baseDir/twi/sca.tif" `
+    --out_type="Specific Contributing Area" 
+
+# 7. Cálculo del TWI (Índice de Humedad Topográfica)
+Write-Host "Calculando TWI..." -ForegroundColor Cyan
+& $wbt --run=WetnessIndex `
+    --sca="$baseDir/twi/sca.tif" `
+    --slope="$baseDir/slope/slope_grados.tif" `
+    --output="$baseDir/twi/twi.tif" 
+
+# 8. Cálculo del Downslope Index
+Write-Host "Calculando Downslope Index..." -ForegroundColor Cyan
+& $wbt --run=DownslopeIndex `
+    --dem="$baseDir/mde/mde_filled.tif" `
+    --output="$baseDir/slope/downslope_index.tif" `
+    --out_type=tangent 
+
+# 8.3. Cálculo algebraico del Downslope TWI
+Write-Host "Calculando Downslope TWI Final..." -ForegroundColor Cyan
+& $wbt --run=RasterCalculator `
+    --statement="log([sca.tif] / ([downslope_index.tif] + 0.000001))" `
+    --output="$baseDir/twi/twid.tif" 
